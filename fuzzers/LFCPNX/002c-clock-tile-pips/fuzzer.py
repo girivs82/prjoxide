@@ -35,6 +35,8 @@ INSTANCES = {
     "PCLK_DLY_10": "CIB_R36C159:PCLK_DLY_10",
     "PCLK_DLY_20": "CIB_R39C159:PCLK_DLY_20",
     "DDR_OSC_R": "CIB_R72C159:DDR_OSC_R",
+    "BMID_0_ECLK_1": "CIB_R74C73:BMID_0_ECLK_1",
+    "BMID_1_ECLK_2": "CIB_R74C74:BMID_1_ECLK_2",
 }
 
 # Per tile type: global bel -> R/C of its wires on LFCPNX-100 (found with --locate, 2026-11-11).
@@ -48,6 +50,8 @@ _ECLK = {
 GLOBAL_LOCS = {
     "ECLK_0": _ECLK,
     "ECLK_3": _ECLK,
+    "BMID_0_ECLK_1": _ECLK,
+    "BMID_1_ECLK_2": {**_ECLK, "_BMID_CORE_BMIDMUX": (73, 73), "_ECLKLOGICMUXPLLFB_CORE_ECLKPLLFBR": (73, 75)},
     "DLY40": {"_I4_{}".format(i): (73, 70) for i in range(9)},
     "PCLK_DLY_10": {"_I4_{}".format(i): (36, 158) for i in range(9)},
 }
@@ -56,7 +60,7 @@ GLOBAL_LOCS = {
 # fuzzes ECLK_0, BMID_0_ECLK_1, BMID_1_ECLK_2 and ECLK_3 together); e.g. ECLKSYNCM2 -> ECLKOUT2 of
 # ECLKCASMUX5 sets a bit in ECLK_0 and one in BMID_0_ECLK_1.
 _ECLK_GROUP = ["CIB_R74C72:ECLK_0", "CIB_R74C73:BMID_0_ECLK_1", "CIB_R74C74:BMID_1_ECLK_2", "CIB_R74C75:ECLK_3"]
-EXTRA_TILES = {tt: [x for x in _ECLK_GROUP if x != INSTANCES[tt]] for tt in ("ECLK_0", "ECLK_3")}
+EXTRA_TILES = {tt: [x for x in _ECLK_GROUP if x != INSTANCES[tt]] for tt in ("ECLK_0", "ECLK_3", "BMID_0_ECLK_1", "BMID_1_ECLK_2")}
 
 # Per tile type: LIFCL wire name -> Lattice name where LFCPNX's layout differs from LIFCL's.
 # PCLK_DLY_20's DLLDEL sits at W1 on LFCPNX-100 (R39C158 for tile R39C159), not N1W1 as on
