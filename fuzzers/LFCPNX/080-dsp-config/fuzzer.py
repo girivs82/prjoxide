@@ -1,0 +1,273 @@
+from fuzzconfig import FuzzConfig
+import nonrouting
+import fuzzloops
+import re
+
+# LFCPNX / Radiant 2026.1 rejects some LIFCL options (e.g. SEIO33 BANK_VCCIO=1.0).
+# Pre-build every option (the bitstream cache makes the real run reuse these)
+# and drop the ones Radiant refuses, instead of crashing the worker thread.
+import os, threading
+_fuzz_enum_setting = nonrouting.fuzz_enum_setting
+def _robust_enum_setting(config, empty_bitfile, name, values, get_sv_substs, *args, **kwargs):
+    if kwargs.get("min_cover"):
+        # callers using min_cover pass tuples to get_sv_substs; leave those alone
+        return _fuzz_enum_setting(config, empty_bitfile, name, values, get_sv_substs, *args, **kwargs)
+    ok = []
+    for v in values:
+        bit = config.build_design(config.sv, get_sv_substs(v), "chk{}_{}_".format(threading.get_ident(), v))
+        if os.path.exists(bit):
+            ok.append(v)
+        else:
+            print("SKIP {} = {} (rejected by Radiant)".format(name, v), flush=True)
+    if not any(v != "NONE" for v in ok):
+        # Every real option failed: almost certainly a template/primitive problem
+        # (unknown module, DRC), not illegal settings. Stop instead of skipping.
+        raise RuntimeError("all options of {} rejected; check the Radiant logs".format(name))
+    if len(ok) < 2:
+        print("SKIP {}: fewer than two legal values".format(name), flush=True)
+        return
+    return _fuzz_enum_setting(config, empty_bitfile, name, ok, get_sv_substs, *args, **kwargs)
+nonrouting.fuzz_enum_setting = _robust_enum_setting
+
+configs = [
+    # LFCPNX DSP row 20: DSP_R_1..11 at C75..85 (MIB_EBR C74), DSP_L_0..10 at C14..24 (MIB_EBR C13)
+    ((19, 75), FuzzConfig(job="DSPMODER", device="LFCPNX-100", sv="../shared/empty_100.v", tiles=
+        ["CIB_R20C74:MIB_EBR"] + ["CIB_R20C{}:DSP_R_{}".format(74 + i, i) for i in range(1, 12)])),
+    ((19, 15), FuzzConfig(job="DSPMODEL", device="LFCPNX-100", sv="../shared/empty_100.v", tiles=
+        ["CIB_R20C13:MIB_EBR"] + ["CIB_R20C{}:DSP_L_{}".format(c + 14, c) for c in range(11)])),
+]
+
+defaults = {
+    "NONE": "",
+    "MULT9_CORE": "MULT9_CORE:::GSR=DISABLED:RSTA=0,CLK=0,CEA=0",
+    "PREADD9_CORE": "PREADD9_CORE:::GSR=DISABLED,REGBYPSBL=REGISTER,REGBYPSBR0=REGISTER,REGBYPSBR1=REGISTER:RSTB=0,RSTCL=0,CLK=0,CEB=0,CECL=0",
+    "MULT18_CORE": "MULT18_CORE:::MULT18X18=DISABLED,SFTEN=DISABLED,ROUNDBIT=ROUND_TO_BIT0",
+    "MULT18X36_CORE": "MULT18X36_CORE:::MULT18X36=DISABLED,MULT36=DISABLED,SFTEN=DISABLED,ROUNDBIT=ROUND_TO_BIT0",
+    "REG18_CORE": "REG18_CORE:::GSR=DISABLED:RSTP=0,CLK=0,CEP=0",
+    "MULT36_CORE": "MULT36_CORE:::MULT36X36=DISABLED",
+    "ACC54_CORE": "ACC54_CORE:::GSR=DISABLED,SIGN=DISABLED,STATICOPCODE_EN=DISABLED,OUTREGBYPS=REGISTER,CONSTSEL=BYPASS,\
+ACCUMODE=MODE0,ACCUBYPS=USED,CREGBYPS1=REGISTER,CREGBYPS2=REGISTER,CREGBYPS3=REGISTER,\
+CINREGBYPS1=REGISTER,CINREGBYPS2=REGISTER,CINREGBYPS3=REGISTER,LOADREGBYPS1=REGISTER,LOADREGBYPS2=REGISTER,LOADREGBYPS3=REGISTER,\
+M9ADDSUBREGBYPS1=REGISTER,M9ADDSUBREGBYPS2=REGISTER,M9ADDSUBREGBYPS3=REGISTER,ADDSUBSIGNREGBYPS1=REGISTER,ADDSUBSIGNREGBYPS2=REGISTER,ADDSUBSIGNREGBYPS3=REGISTER,\
+CASCOUTREGBYPS=REGISTER,SFTEN=DISABLED:RSTCIN=0,RSTO=0,RSTC=0,CLK=0,CECIN=0,CECTRL=0,CEO=0,CEC=0"
+
+}
+
+#r = 37
+#c = 63
+
+ce_sigs = {
+    "MULT9_CORE": ["CEA", "CEP"],
+    "PREADD9_CORE": ["CEB", "CECL"],
+    "MULT18_CORE": [],
+    "REG18_CORE": ["CEP"],
+    "MULT18X36_CORE": [],
+    "MULT36_CORE": [],
+    "ACC54_CORE": ["CECIN", "CECTRL", "CEO", "CEC"],
+}
+
+rst_sigs = {
+    "MULT9_CORE": ["RSTA", "RSTP"],
+    "PREADD9_CORE": ["RSTB", "RSTCL"],
+    "MULT18_CORE": [],
+    "REG18_CORE": ["RSTP"],
+    "MULT18X36_CORE": [],
+    "MULT36_CORE": [],
+    "ACC54_CORE": ["RSTCIN", "RSTCTRL", "RSTO", "RSTC"]
+}
+
+regs = {
+    "MULT9_CORE": ["B", "A1", "A2"],
+    "PREADD9_CORE": ["BR0", "BR1", "BL"],
+    "MULT18_CORE": [],
+    "REG18_CORE": [""],
+    "MULT18X36_CORE": [],
+    "MULT36_CORE": [],
+    "ACC54_CORE": []
+}
+
+ed = ["ENABLED", "DISABLED"]
+ub = ["USED", "BYPASS"]
+rb = ["REGISTER", "BYPASS"]
+
+misc_config = {
+    "MULT9_CORE": [
+        ("SIGNEDSTATIC_EN", ed, "`A` signedness from `SIGNEDSTATIC_EN` (when `ENABLED`) or `ASIGNED` input"),
+        ("ASIGNED_OPERAND_EN", ed, "`A` is signed in `SIGNEDSTATIC_EN` mode"),
+        ("BYPASS_MULT9", ub, "selects between actually doing 9x9 mult; or just passing through inputs"),
+        ("SHIFTA", ed, "use shift register for `A`"),
+        ("SR_18BITSHIFT_EN", ed, "use 18-bit shift register for `A`")
+    ],
+    "PREADD9_CORE": [
+        ("SIGNEDSTATIC_EN", ed, "`B` and `C` signedness from parameters (`ENABLED`) or inputs"),
+        ("SUBSTRACT_EN", ["SUBTRACTION", "ADDITION"], "preadder function"),
+        ("CSIGNED", ed, "`C` signedness in `SIGNEDSTATIC_EN` mode"),
+        ("BSIGNED_OPERAND_EN", ed, "`B` signedness in `SIGNEDSTATIC_EN` mode"),
+        ("BYPASS_PREADD9", ub, "selects between pre-adder in datapath; or just passing through inputs"),
+        ("SHIFTBR", rb, "use right shift register for `B`"),
+        ("SHIFTBL", rb, "use left shift register for `B`"),
+        ("PREADDCAS_EN", ed, "enable pre-adder carry cascade"),
+        ("SR_18BITSHIFT_EN", ed, "use 18-bit shift register for `B`"),
+        ("OPC", ["INPUT_B_AS_PREADDER_OPERAND", "INPUT_C_AS_PREADDER_OPERAND"], "selects 2nd pre-adder operand")
+    ],
+    "MULT18_CORE": [
+        ("MULT18X18", ed, "enable 18x18 multiply"),
+        ("SFTEN", ed, "enable variable shifter controlled by `SFTCTRL`"),
+        ("ROUNDHALFUP", ed, ""),
+        ("ROUNDRTZI", ["ROUND_TO_ZERO", "ROUND_TO_INFINITE"], "rounding mode"),
+    ],
+    "MULT18X36_CORE": [
+        ("MULT18X36", ed, "enable 18x36 multiply"),
+        ("MULT36", ed, "used as part of 36x36 multiply"),
+        ("SFTEN", ed, "enable variable shifter controlled by `SFTCTRL`"),
+        ("ROUNDHALFUP", ed, ""),
+        ("MULT36X36H", ["USED_AS_LOWER_BIT_GENERATION", "USED_AS_HIGHER_BIT_GENERATION"], "half of 36x36 multiply selection"),
+        ("ROUNDRTZI", ["ROUND_TO_ZERO", "ROUND_TO_INFINITE"], "rounding mode"),
+    ],
+    "REG18_CORE": [],
+    "MULT36_CORE": [
+        ("MULT36X36", ed, "enable 36x36 multiply")
+    ],
+    "ACC54_CORE": [
+        ("SIGN", ed, "select dynamic signedness or signedness controlled by parameters"),
+        ("M9ADDSUB_CTRL", ["ADDITION", "ADDSUB", "SUBADD", "SUBTRACTION"], "select stage 1 operation in static opcode mode"),
+        ("ADDSUB_CTRL", ["ADD_ADD_CTRL_54_BIT_ADDER", "SUB_ADD_CTRL_54_BIT_ADDER", "ADD_SUB_CTRL_54_BIT_ADDER", "SUB_SUB_CTRL_54_BIT_ADDER"], "select stage 2 operation in static opcode mode"),
+        ("STATICOPCODE_EN", ed, "operation controlled by input pins or parameters"),
+        ("OUTREGBYPS", rb, "output register enable or bypass"),
+        ("CONSTSEL", ["BYPASS", "SELECT"], "if `SELECT` then use PROGCONST for `C` operand"),
+        ("DSPCASCADE", ed, "enable DSP cascading"),
+        ("ACC108CASCADE", ["BYPASSCASCADE", "CASCADE2ACCU54TOFORMACCU108"], "cascade carry of two ACC54s to create a 108-bit accumulator"),
+        ("ACCUBYPS", ub, "accumulator bypass"),
+        ("CREGBYPS1", rb, "`C` register 1 enable or bypass"),
+        ("CREGBYPS2", rb, "`C` register 2 enable or bypass"),
+        ("CREGBYPS3", rb, "`C` register 3 enable or bypass"),
+        ("CINREGBYPS1", rb, "`CIN` register 1 enable or bypass"),
+        ("CINREGBYPS2", rb, "`CIN` register 2 enable or bypass"),
+        ("CINREGBYPS3", rb, "`CIN` register 3 enable or bypass"),
+        ("LOADREGBYPS1", rb, "`LOAD` register 1 enable or bypass"),
+        ("LOADREGBYPS2", rb, "`LOAD` register 2 enable or bypass"),
+        ("LOADREGBYPS3", rb, "`LOAD` register 3 enable or bypass"),
+        ("M9ADDSUBREGBYPS1", rb, "`M9ADDSUB` register 1 enable or bypass"),
+        ("M9ADDSUBREGBYPS2", rb, "`M9ADDSUB` register 2 enable or bypass"),
+        ("M9ADDSUBREGBYPS3", rb, "`M9ADDSUB` register 3 enable or bypass"),
+        ("ADDSUBSIGNREGBYPS1", rb, "`ADDSUBSIGN` register 1 enable or bypass"),
+        ("ADDSUBSIGNREGBYPS2", rb, "`ADDSUBSIGN` register 2 enable or bypass"),
+        ("ADDSUBSIGNREGBYPS3", rb, "`ADDSUBSIGN` register 3 enable or bypass"),
+        ("ROUNDHALFUP", ed, ""),
+        ("ROUNDRTZI", ["ROUND_TO_ZERO", "ROUND_TO_INFINITE"], "rounding mode"),
+        ("CASCOUTREGBYPS", rb, "cascade output register enable or bypass"),
+        ("SFTEN", ed, "enable variable shifter controlled by `SFTCTRL`"),
+        ("ACCUMODE", ["MODE{}".format(i) for i in range(8)] , "accumulator mode"),
+    ]
+}
+
+def main():
+    def per_config(x):
+        rc, cfg = x
+        r, c = rc
+        locs = [
+            ("ACC54_0", "ACC54_CORE", "ACC54_CORE_R{}C{}".format(r, c + 2)),
+            ("ACC54_1", "ACC54_CORE", "ACC54_CORE_R{}C{}".format(r, c + 6)),
+
+            ("MULT18_0", "MULT18_CORE", "MULT18_CORE_R{}C{}".format(r, c)),
+            ("MULT18_1", "MULT18_CORE", "MULT18_CORE_R{}C{}".format(r, c + 1)),
+            ("MULT18_2", "MULT18_CORE", "MULT18_CORE_R{}C{}".format(r, c + 4)),
+            ("MULT18_3", "MULT18_CORE", "MULT18_CORE_R{}C{}".format(r, c + 5)),
+
+            ("REG18_L0_0", "REG18_CORE", "REG18_CORE_R{}C{}A".format(r, c + 2)),
+            ("REG18_L0_1", "REG18_CORE", "REG18_CORE_R{}C{}B".format(r, c + 2)),
+            ("REG18_L1_0", "REG18_CORE", "REG18_CORE_R{}C{}C".format(r, c + 2)),
+            ("REG18_L1_1", "REG18_CORE", "REG18_CORE_R{}C{}D".format(r, c + 2)),
+
+            ("REG18_H0_0", "REG18_CORE", "REG18_CORE_R{}C{}A".format(r, c + 6)),
+            ("REG18_H0_1", "REG18_CORE", "REG18_CORE_R{}C{}B".format(r, c + 6)),
+            ("REG18_H1_0", "REG18_CORE", "REG18_CORE_R{}C{}C".format(r, c + 6)),
+            ("REG18_H1_1", "REG18_CORE", "REG18_CORE_R{}C{}D".format(r, c + 6)),
+
+            ("MULT9_L0", "MULT9_CORE", "MULT9_CORE_R{}C{}A".format(r, c)),
+            ("MULT9_H0", "MULT9_CORE", "MULT9_CORE_R{}C{}B".format(r, c)),
+            ("MULT9_L1", "MULT9_CORE", "MULT9_CORE_R{}C{}A".format(r, c + 1)),
+            ("MULT9_H1", "MULT9_CORE", "MULT9_CORE_R{}C{}B".format(r, c + 1)),
+            ("MULT9_L2", "MULT9_CORE", "MULT9_CORE_R{}C{}A".format(r, c + 4)),
+            ("MULT9_H2", "MULT9_CORE", "MULT9_CORE_R{}C{}B".format(r, c + 4)),
+            ("MULT9_L3", "MULT9_CORE", "MULT9_CORE_R{}C{}A".format(r, c + 5)),
+            ("MULT9_H3", "MULT9_CORE", "MULT9_CORE_R{}C{}B".format(r, c + 5)),
+
+            ("PREADD9_L0", "PREADD9_CORE", "PREADD9_CORE_R{}C{}A".format(r, c)),
+            ("PREADD9_H0", "PREADD9_CORE", "PREADD9_CORE_R{}C{}B".format(r, c)),
+            ("PREADD9_L1", "PREADD9_CORE", "PREADD9_CORE_R{}C{}A".format(r, c + 1)),
+            ("PREADD9_H1", "PREADD9_CORE", "PREADD9_CORE_R{}C{}B".format(r, c + 1)),
+            ("PREADD9_L2", "PREADD9_CORE", "PREADD9_CORE_R{}C{}A".format(r, c + 4)),
+            ("PREADD9_H2", "PREADD9_CORE", "PREADD9_CORE_R{}C{}B".format(r, c + 4)),
+            ("PREADD9_L3", "PREADD9_CORE", "PREADD9_CORE_R{}C{}A".format(r, c + 5)),
+            ("PREADD9_H3", "PREADD9_CORE", "PREADD9_CORE_R{}C{}B".format(r, c + 5)),
+
+            ("MULT18X36_0", "MULT18X36_CORE", "MULT18X36_CORE_R{}C{}".format(r, c + 2)),
+            ("MULT18X36_1", "MULT18X36_CORE", "MULT18X36_CORE_R{}C{}".format(r, c + 6)),
+
+            ("MULT36", "MULT36_CORE", "MULT36_CORE_R{}C{}".format(r, c + 6)),
+        ]
+        cfg.setup()
+        empty = cfg.build_design(cfg.sv, {})
+        cfg.sv = "dsp.v"
+        def per_loc(l):
+            dsp, prim, site = l
+            def get_substs(mode="NONE", default_cfg=False, kv=None, mux=False, extra_sigs=""):
+                if default_cfg:
+                    config = defaults[mode] + extra_sigs
+                elif kv is None:
+                    config = ""
+                elif mux:
+                    val = "#SIG"
+                    if kv[1] in ("0", "1"):
+                        val = kv[1]
+                    if kv[1] == "INV":
+                        val = "#INV"
+                    config = "{}::::{}={}{}".format(mode, kv[0], val, extra_sigs)
+                else:
+                    config = "{}:::{}={}".format(mode, kv[0], kv[1])
+                return dict(mode=mode, cmt="//" if mode == "NONE" else "", config=config, prim=prim, site=site)
+            if prim == "ACC54_CORE":
+                # Use 'cover' to get a minimal bit set
+                nonrouting.fuzz_enum_setting(cfg, empty, "{}.MODE".format(dsp), ["NONE", prim],
+                        lambda x: get_substs(x[0], default_cfg=True, extra_sigs=x[1]), False, assume_zero_base=True,
+                        min_cover={"NONE": [""], "ACC54_CORE": [" ACC54_CORE::::RSTCTRL=0", " ACC54_CORE::::RSTCTRL=#SIG"]},
+                        desc="{} primitive mode".format(dsp))
+            else:
+                nonrouting.fuzz_enum_setting(cfg, empty, "{}.MODE".format(dsp), ["NONE", prim],
+                    lambda x: get_substs(x, default_cfg=True), False, assume_zero_base=True,
+                    desc="{} primitive mode".format(dsp))
+            if prim not in ("MULT18_CORE", "MULT18X36_CORE", "MULT36_CORE"):
+                nonrouting.fuzz_enum_setting(cfg, empty, "{}.GSR".format(dsp), ["ENABLED", "DISABLED"],
+                            lambda x: get_substs(mode=prim, kv=("GSR", x)), False,
+                            desc="if `ENABLED` primitive is reset by user GSR")
+                nonrouting.fuzz_enum_setting(cfg, empty, "{}.RESET".format(dsp), ["SYNC", "ASYNC"],
+                            lambda x: get_substs(mode=prim, kv=("RESET", x)), False,
+                            desc="selects synchronous or asynchronous reset for DSP registers")
+                nonrouting.fuzz_enum_setting(cfg, empty, "{}.CLKMUX".format(dsp), ["0", "CLK", "INV"],
+                            lambda x: get_substs(mode=prim, kv=("CLK", x), mux=True),
+                            False, assume_zero_base=True,
+                            desc="clock gating and inversion control")
+            for ce in ce_sigs[prim]:
+                nonrouting.fuzz_enum_setting(cfg, empty, "{}.{}MUX".format(dsp, ce), ["1", ce, "INV"],
+                        lambda x: get_substs(mode=prim, kv=(ce, x), mux=True, extra_sigs=",CLK=#SIG"),
+                        False, assume_zero_base=True,
+                        desc="{} gating and inversion control".format(ce))
+            for rst in rst_sigs[prim]:
+                nonrouting.fuzz_enum_setting(cfg, empty, "{}.{}MUX".format(dsp, rst), ["0", rst, "INV"],
+                        lambda x: get_substs(mode=prim, kv=(rst, x), mux=True, extra_sigs=",CLK=#SIG"),
+                        False, assume_zero_base=True,
+                        desc="{} gating and inversion control".format(rst))
+            for reg in regs[prim]:
+                nonrouting.fuzz_enum_setting(cfg, empty, "{}.REGBYPS{}".format(dsp, reg), ["REGISTER", "BYPASS"],
+                            lambda x: get_substs(mode=prim, kv=("REGBYPS{}".format(reg), x)), False, assume_zero_base=True,
+                            desc="register enable or bypass{}{}".format(" for " if reg != "" else "", reg))
+            for name, opts, desc in misc_config[prim]:
+                nonrouting.fuzz_enum_setting(cfg, empty, "{}.{}".format(dsp, name), opts,
+                            lambda x: get_substs(mode=prim, kv=(name, x)), False, assume_zero_base=True,
+                            desc=desc)
+        fuzzloops.parallel_foreach(locs, per_loc)
+    fuzzloops.parallel_foreach(configs, per_config)
+
+if __name__ == "__main__":
+    main()
