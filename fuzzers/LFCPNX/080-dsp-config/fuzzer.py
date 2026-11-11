@@ -8,6 +8,30 @@ import re
 # and drop the ones Radiant refuses, instead of crashing the worker thread.
 import os, threading
 _fuzz_enum_setting = nonrouting.fuzz_enum_setting
+import subprocess, string, database as _database
+def _retry_build(config, substs, prefix):
+    """Rebuild one design with Radiant's output captured; returns (bitfile exists, Radiant ERROR lines)."""
+    subst = dict(substs)
+    subst.setdefault("arcs_attr", "")
+    subst.setdefault("device", config.device)
+    desfile = os.path.join(config.workdir, prefix + "design.v")
+    bitfile = os.path.join(config.workdir, prefix + "design.bit")
+    logfile = os.path.join(config.workdir, prefix + "design.log")
+    if os.path.exists(bitfile):
+        os.remove(bitfile)
+    with open(config.sv) as inf, open(desfile, "w") as ouf:
+        ouf.write(string.Template(inf.read()).substitute(**subst))
+    env = os.environ.copy()
+    if config.struct_mode:
+        env["STRUCT_VER"] = "1"
+    if config.rbk_mode:
+        env["RBK_MODE"] = "1"
+    r = subprocess.run(["bash", os.path.join(_database.get_oxide_root(), "radiant.sh"), config.device, desfile],
+                       env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    with open(logfile, "w") as lf:
+        lf.write(r.stdout)
+    errors = [l for l in r.stdout.splitlines() if re.match(r"ERROR <\d+>", l)]
+    return os.path.exists(bitfile), errors
 def _robust_enum_setting(config, empty_bitfile, name, values, get_sv_substs, *args, **kwargs):
     if kwargs.get("min_cover"):
         # callers using min_cover pass tuples to get_sv_substs; leave those alone
@@ -17,8 +41,18 @@ def _robust_enum_setting(config, empty_bitfile, name, values, get_sv_substs, *ar
         bit = config.build_design(config.sv, get_sv_substs(v), "chk{}_{}_".format(threading.get_ident(), v))
         if os.path.exists(bit):
             ok.append(v)
+            continue
+        # No bitstream: retry once with a fresh prefix and Radiant's output captured, so a
+        # transient failure can't turn into a silently missing option.
+        built, errors = _retry_build(config, get_sv_substs(v), "chkretry{}_{}_".format(threading.get_ident(), v))
+        if built:
+            print("RETRY-OK {} = {} (first pre-check build produced no bitstream)".format(name, v), flush=True)
+            ok.append(v)
+        elif errors:
+            print("SKIP {} = {} (rejected by Radiant: {})".format(name, v, errors[0]), flush=True)
         else:
-            print("SKIP {} = {} (rejected by Radiant)".format(name, v), flush=True)
+            raise RuntimeError("{} = {}: no bitstream on retry and no Radiant ERROR line; "
+                               "transient failure? see chkretry*_{}_design.log".format(name, v, v))
     if not any(v != "NONE" for v in ok):
         # Every real option failed: almost certainly a template/primitive problem
         # (unknown module, DRC), not illegal settings. Stop instead of skipping.
