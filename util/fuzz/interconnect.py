@@ -82,3 +82,50 @@ def fuzz_interconnect(
             fz.add_pip_sample(fuzzconfig.db, from_wire, arc_bit)
         fz.solve(fuzzconfig.db)
     fuzzloops.parallel_foreach(list(sorted(sinks.keys())), per_sink)
+
+
+def fuzz_pip_list(
+        config,
+        pips,
+        full_mux_style=False,
+        ignore_tiles=set(),
+        extra_substs={},
+        fc_filter=lambda x: True,
+    ):
+    """
+    Fuzz an explicit list of pips, given as (from_wire, to_wire) tuples in Lattice (un-normalised) format, instead
+    of pips found with the Tcl API (see fuzz_interconnect). Each arc is forced in a separate design and the bits are
+    solved per sink exactly as fuzz_interconnect does.
+
+    An arc for which Radiant produces no bitstream (it rejects arcs that do not exist with a fatal error) is reported
+    as ABSENT and left out; a sink with no buildable arcs is not solved.
+
+    :param config: FuzzConfig instance containing target device and tile(s) of interest
+    :param pips: iterable of (from_wire, to_wire) tuples
+    :param full_mux_style: if True, is a full mux, and all 0s is considered a valid config bit possibility
+    :param ignore_tiles: don't reject pips that touch these tiles
+    :param extra_substs: extra SV substitutions (also used for the base design)
+    :param fc_filter: skip fixed connections if this returns false for a sink wire name
+    """
+    import os
+    base_bitf = config.build_design(config.sv, extra_substs, "base_")
+    sinks = {}
+    for from_wire, to_wire in sorted(set(pips)):
+        sinks.setdefault(to_wire, []).append(from_wire)
+    def per_sink(to_wire):
+        prefix = "thread{}_".format(threading.get_ident())
+        fz = libpyprjoxide.Fuzzer.pip_fuzzer(fuzzconfig.db, base_bitf, set(config.tiles), to_wire, config.tiles[0],
+                                             ignore_tiles, full_mux_style, not (fc_filter(to_wire)))
+        samples = 0
+        for from_wire in sinks[to_wire]:
+            substs = extra_substs.copy()
+            substs["arcs_attr"] = r', \dm:arcs ="{}.{}"'.format(to_wire, from_wire)
+            arc_bit = config.build_design(config.sv, substs, prefix)
+            if not os.path.exists(arc_bit):
+                print("ABSENT {} -> {} (no bitstream)".format(from_wire, to_wire), flush=True)
+                continue
+            fz.add_pip_sample(fuzzconfig.db, from_wire, arc_bit)
+            samples += 1
+        if samples > 0:
+            fz.solve(fuzzconfig.db)
+    fuzzloops.parallel_foreach(list(sorted(sinks.keys())), per_sink)
