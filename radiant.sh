@@ -60,7 +60,7 @@ cp "$2.v" "$2.tmp/input.v"
 MAYBE_PDC=""
 if [ -e "$2.pdc" ]; then cp "$2.pdc" "$2.tmp/input.pdc"; MAYBE_PDC="$2.tmp/input.pdc"; fi
 
-if ([ -z "$FORCE_REBUILD"] && (LD_LIBRARY_PATH=$ld_lib_path_orig $bscache fetch $PART "$2.tmp" "$2.tmp/input.v" $MAYBE_PDC)); then
+if ([ -z "$FORCE_REBUILD" ] && (LD_LIBRARY_PATH=$ld_lib_path_orig $bscache fetch $PART "$2.tmp" "$2.tmp/input.v" $MAYBE_PDC)); then
 	# Cache hit
 	echo "Cache hit, not running Radiant"
 else
