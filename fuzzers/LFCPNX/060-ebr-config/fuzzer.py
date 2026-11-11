@@ -37,14 +37,18 @@ configs = [
     ("EBR_CORE_R10C22", "EBR3", FuzzConfig(job="EBRMODE3", device="LFCPNX-100", sv="../shared/empty_100.v", tiles=["CIB_R11C20:MIB_EBR", "CIB_R11C21:EBR_7", "CIB_R11C22:EBR_8", "CIB_R11C23:EBR_9", "CIB_R11C24:EBR_10", "CIB_R11C25:MIB_EBR"])),
 ]
 
-# These config sets create a minimum bit change for mode fuzzing
+# These config sets create a minimum bit change for mode fuzzing.
+# Radiant 2026.1 FIFO16K_MODE uses write/read names (DATA_WIDTH_W/R, CLKW/CLKR,
+# RSTW/RPRST, single OUTREG/RESETMODE/ASYNC_RST_RELEASE) instead of the A/B names
+# LIFCL's 060 uses; the A/B names are rejected (ERROR 1051343). PDP16K_MODE and
+# PDPSC16K_MODE have no WE pin in Radiant 2026.1 (writes are gated by CEW).
 defaults = {
     "NONE": "",
     "DP16K_MODE": "DP16K_MODE:::DATA_WIDTH_A=X18,DATA_WIDTH_B=X18,INIT_DATA=NO_INIT,WID=0b00000000000:CLKA=0,CLKB=0",
     "PDP16K_MODE": "PDP16K_MODE:::DATA_WIDTH_R=X36,DATA_WIDTH_W=X36,INIT_DATA=NO_INIT,WID=0b00000000000:CLKR=0,CLKW=0",
     "PDPSC16K_MODE": "PDPSC16K_MODE:::DATA_WIDTH_R=X36,DATA_WIDTH_W=X36,INIT_DATA=NO_INIT,WID=0b00000000000:CLK=0",
     "SP16K_MODE": "SP16K_MODE:::DATA_WIDTH=X18,INIT_DATA=NO_INIT,WID=0b00000000000:CLK=0",
-    "FIFO16K_MODE": "FIFO16K_MODE:::FULLBITS=0b00000000000000,DATA_WIDTH_A=X36,DATA_WIDTH_B=X36 FIFO16K_MODE::::CKA=0,CKB=0"
+    "FIFO16K_MODE": "FIFO16K_MODE:::FULLBITS=0b00000000000000,DATA_WIDTH_W=X36,DATA_WIDTH_R=X36 FIFO16K_MODE::::CLKW=0,CLKR=0"
 }
 
 def main():
@@ -94,27 +98,27 @@ def main():
         nonrouting.fuzz_enum_setting(cfg, empty, "{}.SP16K_MODE.DATA_WIDTH".format(ebr), ["X1", "X2", "X4", "X9", "X18"],
             lambda x: get_substs(mode="SP16K_MODE", kv=("DATA_WIDTH", x)), False,
             desc="data width of R/W port in SP16K_MODE")
-        nonrouting.fuzz_enum_setting(cfg, empty, "{}.FIFO16K_MODE.DATA_WIDTH_A".format(ebr), ["X1", "X2", "X4", "X9", "X18", "X32", "X36"],
-            lambda x: get_substs(mode="FIFO16K_MODE", kv=("DATA_WIDTH_A", x)), False,
-            desc="data width of port A in FIFO16K_MODE")
-        nonrouting.fuzz_enum_setting(cfg, empty, "{}.FIFO16K_MODE.DATA_WIDTH_B".format(ebr), ["X1", "X2", "X4", "X9", "X18", "X32", "X36"],
-            lambda x: get_substs(mode="FIFO16K_MODE", kv=("DATA_WIDTH_B", x)), False,
-            desc="data width of port B in FIFO16K_MODE")
+        nonrouting.fuzz_enum_setting(cfg, empty, "{}.FIFO16K_MODE.DATA_WIDTH_W".format(ebr), ["X1", "X2", "X4", "X9", "X18", "X32", "X36"],
+            lambda x: get_substs(mode="FIFO16K_MODE", kv=("DATA_WIDTH_W", x)), False,
+            desc="data width of write port in FIFO16K_MODE")
+        nonrouting.fuzz_enum_setting(cfg, empty, "{}.FIFO16K_MODE.DATA_WIDTH_R".format(ebr), ["X1", "X2", "X4", "X9", "X18", "X32", "X36"],
+            lambda x: get_substs(mode="FIFO16K_MODE", kv=("DATA_WIDTH_R", x)), False,
+            desc="data width of read port in FIFO16K_MODE")
 
         for mode, clksigs in [("DP16K_MODE", ["CLKA", "CLKB"]),
                                 ("PDP16K_MODE", ["CLKW", "CLKR"]),
                                 ("PDPSC16K_MODE", ["CLK"]),
                                 ("SP16K_MODE", ["CLK"]),
-                                ("FIFO16K_MODE", ["CKA", "CKB"])]:
+                                ("FIFO16K_MODE", ["CLKW", "CLKR"])]:
             for sig in clksigs:
                 nonrouting.fuzz_enum_setting(cfg, empty, "{}.{}.{}MUX".format(ebr, mode, sig), ["0", sig, "INV"],
                     lambda x: get_substs(mode=mode, kv=(sig, x), mux=True), False,
                     desc="clock inversion control for {}".format(sig))
         for mode, cwesigs in [("DP16K_MODE", ["WEA", "WEB", "CEA", "CEB", "RSTA", "RSTB", "ADA0", "ADA1", "ADA2", "ADA3", "ADB0", "ADB1"]),
-                                ("PDP16K_MODE", ["WE", "CER", "CEW", "RST", "ADW0", "ADW1", "ADW2", "ADW3", "ADR0", "ADR1"]),
-                                ("PDPSC16K_MODE", ["WE", "CER", "CEW", "RST", "ADW0", "ADW1", "ADW2", "ADW3", "ADR0", "ADR1"]),
+                                ("PDP16K_MODE", ["CER", "CEW", "RST", "ADW0", "ADW1", "ADW2", "ADW3", "ADR0", "ADR1"]),
+                                ("PDPSC16K_MODE", ["CER", "CEW", "RST", "ADW0", "ADW1", "ADW2", "ADW3", "ADR0", "ADR1"]),
                                 ("SP16K_MODE", ["WE", "CE", "RST", "AD0", "AD1", "AD2", "AD3"]),
-                                ("FIFO16K_MODE", ["CEA", "CEB", "RSTA", "RSTB"])]:
+                                ("FIFO16K_MODE", ["RSTW", "RPRST"])]:
             for sig in cwesigs:
                 nonrouting.fuzz_enum_setting(cfg, empty, "{}.{}.{}MUX".format(ebr, mode, sig), [sig, "INV"],
                     lambda x: get_substs(mode=mode, kv=(sig, x), mux=True), False)
@@ -123,7 +127,7 @@ def main():
                                 ("PDP16K_MODE", ["OUTREG"]),
                                 ("PDPSC16K_MODE", ["OUTREG"]),
                                 ("SP16K_MODE", ["OUTREG"]),
-                                ("FIFO16K_MODE", ["OUTREG_A", "OUTREG_B"])]:
+                                ("FIFO16K_MODE", ["OUTREG"])]:
             for outreg in outregs:
                 nonrouting.fuzz_enum_setting(cfg, empty, "{}.{}.{}".format(ebr, mode, outreg), ["USED", "BYPASSED"],
                     lambda x: get_substs(mode=mode, kv=(outreg, x)), False,
@@ -133,7 +137,7 @@ def main():
                                 ("PDP16K_MODE", [""]),
                                 ("PDPSC16K_MODE", [""]),
                                 ("SP16K_MODE", [""]),
-                                ("FIFO16K_MODE", ["_A", "_B"])]:
+                                ("FIFO16K_MODE", [""])]:
             for port in ports:
                 nonrouting.fuzz_enum_setting(cfg, empty, "{}.{}.RESETMODE{}".format(ebr, mode, port), ["ASYNC", "SYNC"],
                     lambda x: get_substs(mode=mode, kv=("RESETMODE{}".format(port), x)), False)
