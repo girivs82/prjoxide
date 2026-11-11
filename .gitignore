@@ -11,3 +11,6 @@ __pycache__
 libprjoxide/target
 Cargo.lock
 .bitstreamcache/
+
+# node-locked licence host ID for tools/radiant-fuzz (never commit)
+tools/radiant-fuzz/docker/licence-mac
