@@ -19,27 +19,19 @@ def tile_pips(family, tiletype):
     return pips
 
 
-def denormalize(chip, tile, r, c, rel):
+def global_bel_suffix(name):
+    """The bel part of a global wire name: JMUXIN2_ECLKBANK_CORE_ECLKBANK5 -> _ECLKBANK_CORE_ECLKBANK5."""
+    return re.sub(r'^J?[A-Z0-9]+?_', '_', name, count=1)
+
+
+def denormalize(chip, tile, r, c, rel, global_locs=None):
     """Lattice absolute names whose prjoxide normalisation in `tile` is `rel`."""
     if rel.startswith("G:"):
-        # Global wire: prjoxide names it G:<name> whatever its R/C; find the R/C whose
-        # R<r>C<c>_<name> normalises to it, near the tile first, then anywhere.
+        # Global wire: prjoxide names it G:<name> whatever its R/C, so normalize_wire cannot locate
+        # it. The caller supplies where each global bel lives (global_locs: bel suffix -> (r, c)).
         base = rel[2:]
-        for span in (3, None):
-            rows = range(max(0, r - 3), r + 4) if span else range(0, 200)
-            cols = range(max(0, c - 3), c + 4) if span else range(0, 200)
-            found = []
-            for rr in rows:
-                for cc in cols:
-                    cand = "R{}C{}_{}".format(rr, cc, base)
-                    try:
-                        if chip.normalize_wire(tile, cand) == rel:
-                            found.append(cand)
-                    except BaseException:
-                        pass
-            if found:
-                return found
-        return []
+        loc = (global_locs or {}).get(global_bel_suffix(base))
+        return ["R{}C{}_{}".format(loc[0], loc[1], base)] if loc else []
     m = re.match(r'^(?:([NSEW]\d+(?:[NSEW]\d+)?):)?(.+)$', rel)
     pre, base = m.group(1), m.group(2)
     dr = dc = 0
