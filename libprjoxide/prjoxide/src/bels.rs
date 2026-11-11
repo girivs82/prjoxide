@@ -715,6 +715,29 @@ impl Bel {
     }
 }
 
+/// Like `get_tile_bels`, but for tile types whose bel placement differs per
+/// family. CertusPro-NX (LFCPNX) reuses CrossLink-NX tile type names (LRAM_0,
+/// LRAM_1, GPLL_LLC) with different bel offsets, and adds LRAM_2..6 and
+/// GPLL_URC. LRAM offsets come from Radiant site names (LRAM_CORE_R<r>C<c>);
+/// PLL offsets from where the GPLL tile's *_PLL_CORE_PLL_LMMI wires live.
+pub fn get_tile_bels_fam(family: &str, tiletype: &str, tiledata: &TileBitsDatabase) -> Vec<Bel> {
+    if family == "LFCPNX" {
+        match tiletype {
+            "LRAM_0" => return vec![Bel::make_lram_core("LRAM0", &tiledata, -1, 0)],
+            "LRAM_1" => return vec![Bel::make_lram_core("LRAM1", &tiledata, -1, 0)],
+            "LRAM_2" => return vec![Bel::make_lram_core("LRAM2", &tiledata, -1, 0)],
+            "LRAM_3" => return vec![Bel::make_lram_core("LRAM3", &tiledata, 1, 1)],
+            "LRAM_4" => return vec![Bel::make_lram_core("LRAM4", &tiledata, 0, 1)],
+            "LRAM_5" => return vec![Bel::make_lram_core("LRAM5", &tiledata, 0, 1)],
+            "LRAM_6" => return vec![Bel::make_lram_core("LRAM6", &tiledata, 0, 1)],
+            "GPLL_LLC" => return vec![Bel::make_pll_core("PLL_LLC", &tiledata, 1, 1)],
+            "GPLL_URC" => return vec![Bel::make_pll_core("PLL_URC", &tiledata, -1, 0)],
+            _ => {}
+        }
+    }
+    get_tile_bels(tiletype, tiledata)
+}
+
 pub fn get_tile_bels(tiletype: &str, tiledata: &TileBitsDatabase) -> Vec<Bel> {
     let mut stt = tiletype;
     if tiletype.ends_with("_EVEN") || tiletype.ends_with("_ODD") {
