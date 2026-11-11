@@ -384,7 +384,7 @@ impl Chip {
     pub fn create_tilegroups(&mut self, db: &mut Database) {
         // Create tilegroups for all bels
         for t in self.tiles.iter() {
-            let bels = get_tile_bels(&t.tiletype, &db.tile_bitdb(&self.family, &t.tiletype).db);
+            let bels = get_tile_bels_fam(&self.family, &t.tiletype, &db.tile_bitdb(&self.family, &t.tiletype).db);
             for bel in bels {
                 let bel_name = format!("R{}C{}_{}", (t.y as i32) + bel.rel_y, (t.x as i32) + bel.rel_x, bel.name);
                 let bel_tiles = get_bel_tiles(&self, t, &bel);
