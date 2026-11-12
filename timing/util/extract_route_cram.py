@@ -236,6 +236,7 @@ class Routing:
         self._fixed = {}
         self.alias = set()
         self.ref_edges = set()   # arcs taken from the reference family's tile types
+        self.ref_arc = {}        # (src key, dst key) -> (tile type, to_wire, from_wire) of a ref arc
         self.extra = defaultdict(set)   # dst key -> {src key}: IO pad arcs added by pin_keys
 
     @staticmethod
@@ -265,7 +266,10 @@ class Routing:
                 continue
             for (r, c) in locs:
                 if tt in dev.tiles_at.get((r, c), ()) and wire_key(dev, r, c, tt, to) == k:
-                    out.append((wire_key(dev, r, c, tt, fw), kind))
+                    sk = wire_key(dev, r, c, tt, fw)
+                    out.append((sk, kind))
+                    if kind == "ref":
+                        self.ref_arc[sk, k] = (tt, to, fw)
         # HROW HPRX wires are fed from the CMUX trunks' {T,B}{L,R}HPRX<n> globals; the LFCPNX
         # SPINE tile types do not carry those arcs (they set no bits).
         if k[0] == "HPRX":
@@ -307,6 +311,9 @@ class Routing:
                 self.alias.add((s_, k))
                 if kind == "ref":
                     self.ref_edges.add((s_, k))
+                    tt, to, fw = self.ref_arc[s_, base]
+                    # on LFCPNX the block pin drives the CIBTEST input, not the CIB wire itself
+                    self.ref_arc[s_, k] = (tt, to + "_CIBTEST", fw)
         return out
 
     EDGE_WIRE_RE = re.compile(r'^([HV])(0[126])([NSEW])(\d{4})$')
@@ -340,6 +347,19 @@ class Routing:
             self.alias.add((a, k))
             return [a]
         return []
+
+    def sink_side(self, sink):
+        """For a sink no source was traced to: the arcs from the sink back to the first node a set
+        pip drives, if that walk is unambiguous (one driver per node)."""
+        out, cur, seen = [], sink, {sink}
+        while cur not in self.drv:
+            d = self.drivers(cur)
+            if len(d) != 1 or d[0] in seen:
+                return []
+            out.append((d[0], cur))
+            cur = d[0]
+            seen.add(cur)
+        return out
 
     def trace(self, sink, sources, max_nodes=20000):
         """Shortest backwards path from `sink` to one of `sources` (a set of keys, or a predicate
@@ -588,6 +608,8 @@ def main():
         n_report, len(site) - n_report))
     arc2pips, wire_fanout = {}, defaultdict(int)
     io_alias = {}
+    confirmed = defaultdict(int)   # reference-family tile arcs that traced arcs used
+    confirmed_partial = defaultdict(int)
     stats = defaultdict(int)
     failures = []
     for src, dst in arcs:
@@ -603,19 +625,32 @@ def main():
             if path_ is not None:
                 break
         if path_ is None:
+            # still confirm reference-family arcs on the sink side: those between the sink pin and
+            # the first node a set pip drives (e.g. a block's clock pin, when the clock route is
+            # lost further up)
+            for dk in sorted(dkeys):
+                for a, b in routing.sink_side(dk):
+                    if (a, b) in routing.ref_arc:
+                        confirmed_partial[routing.ref_arc[a, b]] += 1
             stats["untraced"] += 1
             failures.append(("untraced", src, dst, site[src[0]], site[dst[0]]))
             continue
         stats["traced"] += 1
         stats["via_edge_alias"] += any(p in routing.alias for p in path_)
         stats["via_ref"] += any(p in routing.ref_edges for p in path_)
+        for p in path_:
+            if p in routing.ref_edges and p in routing.ref_arc:
+                confirmed[routing.ref_arc[p]] += 1
         # an alias pair (a, b) is one node under two names: drop it and call b by a's name
         rename = {}
+        # (a CIBTEST input is its driver's node under another name: the pad's or the block's pin)
+        def is_alias(a, b):
+            return (a, b) in routing.alias or (b[0] == "W" and b[-1].endswith("_CIBTEST") and b not in io_alias)
         for a, b in path_:
-            if (a, b) in routing.alias:
+            if is_alias(a, b):
                 rename[b] = rename.get(a, a)
         pips = [(key_name(dev, rename.get(a, a), io_alias), key_name(dev, rename.get(b, b), io_alias))
-                for a, b in path_ if (a, b) not in routing.alias]
+                for a, b in path_ if not is_alias(a, b)]
         arc2pips[src, dst] = pips
         for a, b in pips:
             wire_fanout[a] += 1
@@ -627,6 +662,9 @@ def main():
     print("  ({} of the traced arcs use a wire alias (edge turn-round or CIBTEST input), {} a {} arc "
           "of a tile type LFCPNX has no routing for)".format(stats["via_edge_alias"], stats["via_ref"],
                                                            Device.REF_FAMILY))
+    with open(out + ".ref_arcs.json", "w") as rf:
+        json.dump(dict(traced=sorted([list(k) + [v] for k, v in confirmed.items()]),
+                       sink_side=sorted([list(k) + [v] for k, v in confirmed_partial.items()])), rf, indent=1)
     with open(out + ".failures.txt", "w") as ff:
         for f in failures:
             ff.write(" ".join(str(x) for x in f) + "\n")
