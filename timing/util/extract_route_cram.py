@@ -378,15 +378,18 @@ def unescape(name):
 def parse_vo(fn):
     """(member logical name -> top-level SDF cell, top-level cell -> top port names)"""
     text = open(fn).read()
-    modules = {}
+    modules, bodies = {}, {}
     for m in re.finditer(r'^module (\S+) \((.*?)\);(.*?)^endmodule', text, re.S | re.M):
         name, body = m.group(1), m.group(3)
-        if name == "top":
-            continue
+        bodies[name] = body
         body = body.split("specify")[0]
         members = re.findall(r'^\s+\S+\s+(\\\S+ |[A-Za-z_][\w$]*)\s*\(', body, re.M)
         modules[name] = [unescape(x) for x in members]
-    top = re.search(r'^module top \(.*?\);(.*?)^endmodule', text, re.S | re.M).group(1)
+    # the top module is named after the design (top, top_large, ...): the largest module, as it
+    # instantiates every cell
+    top_name = max(bodies, key=lambda n: len(bodies[n]))
+    top = bodies[top_name]
+    del modules[top_name]
     member2cell, cell2ports = {}, {}
     for m in re.finditer(r'^\s+(\S+)\s+(\\\S+ |[A-Za-z_][\w$\[\]]*)\s*\((.*?)\);', top, re.S | re.M):
         mod, inst, conns = m.group(1), unescape(m.group(2)), m.group(3)
