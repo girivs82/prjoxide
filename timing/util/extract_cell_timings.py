@@ -2,6 +2,7 @@ from parse_sdf import IOPath, SetupHoldCheck
 from os import path
 import database
 import sys, json, os, glob, pickle
+from timing_config import family_from_args
 
 def unescape_sdf_name(name):
     e = ""
@@ -238,10 +239,11 @@ def rewrite_path(modules, modtype, from_pin, to_pin):
 
 def main():
     folder = sys.argv[1]
+    family, fcfg = family_from_args(sys.argv)
     iopaths = {}
     setupholds = {}
 
-    speedgrades = ["4", "5", "6", "10", "11", "12", "M"]
+    speedgrades = fcfg["speedgrades"]
     for speed in speedgrades:
         iopaths[speed] = {}
         setupholds[speed] = {}
@@ -326,7 +328,7 @@ def main():
                 min_setup=sh[0], max_setup=sh[1],
                 min_hold=sh[2], max_hold=sh[3])
             )
-        timing_root = path.join(database.get_db_root(), "LIFCL", "timing")
+        timing_root = path.join(database.get_db_root(), family, "timing")
         os.makedirs(timing_root, exist_ok=True)
         with open(path.join(timing_root, "cells_{}.json".format(speed)), 'w') as outf:
             json.dump(dict(celltypes=json_celltypes), outf, sort_keys=True, indent=4)

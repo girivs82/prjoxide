@@ -1,6 +1,5 @@
 import sys, pickle, math, json, os, glob
 
-import lapie
 from parse_sdf import parse_sdf_file
 import database
 import libpyprjoxide
@@ -8,6 +7,7 @@ import libpyprjoxide
 import numpy as np
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import lsqr
+from scipy.optimize import lsq_linear
 
 from os import path
 
@@ -102,10 +102,12 @@ def process_design(picklef, templ_sdf):
 def main():
     # Import SDF and pickle files
     folder = sys.argv[1]
+    family, fcfg = family_from_args(sys.argv)
+    tmpl = "_{}.sdf.pickle".format(fcfg["template_grade"])
     for picklef in glob.glob(path.join(folder, "*_route.pickle")):
-        if path.exists(picklef.replace("_route.pickle", "_10.sdf.pickle")):
+        if path.exists(picklef.replace("_route.pickle", tmpl)):
             print("Importing {}...".format(picklef))
-            process_design(picklef, picklef.replace("_route.pickle", "_10.sdf.pickle"))
+            process_design(picklef, picklef.replace("_route.pickle", tmpl))
         
     row_ind = []
     col_ind = []
@@ -121,7 +123,7 @@ def main():
     bmin = np.zeros(rows)
     bmax = np.zeros(rows)
 
-    speedgrades = ["4", "5", "6", "10", "11", "12", "M"]
+    speedgrades = fcfg["speedgrades"]
     for speed in speedgrades:
         # For each speedgrade, set up the right hand side of the equation system by using
         # the delays in the interconnect section of the SDF file
@@ -138,8 +140,14 @@ def main():
         print("Running least squares solver for speed {}...".format(speed))
 
         # Run the least squares solver on the system of equations
-        xmin, istop, itn, r1norm = lsqr(A, bmin)[:4]
-        xmax, istop, itn, r1norm = lsqr(A, bmax)[:4]
+        if fcfg.get("nonneg"):
+            # bounded least squares: classes that only ever occur together (e.g. abcd -> cibmuxi
+            # -> cibmuxo -> ebr) are otherwise split into large positive and negative delays
+            xmin = lsq_linear(A, bmin, bounds=(0, np.inf), lsmr_tol="auto").x
+            xmax = lsq_linear(A, bmax, bounds=(0, np.inf), lsmr_tol="auto").x
+        else:
+            xmin, istop, itn, r1norm = lsqr(A, bmin)[:4]
+            xmax, istop, itn, r1norm = lsqr(A, bmax)[:4]
 
         delay_json = {"pip_classes": {}}
 
@@ -153,7 +161,7 @@ def main():
             delay_json["pip_classes"][zd] = dict(base=[0, 0])
 
         # Write JSON so it can be used as part of the database  import process
-        timing_root = path.join(database.get_db_root(), "LIFCL", "timing")
+        timing_root = path.join(database.get_db_root(), family, "timing")
         os.makedirs(timing_root, exist_ok=True)
         with open(path.join(timing_root, "interconnect_{}.json".format(speed)), "w") as jf:
             json.dump(delay_json, jf, indent=4, sort_keys=True)
