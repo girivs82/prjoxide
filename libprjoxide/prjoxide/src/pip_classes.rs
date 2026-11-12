@@ -69,6 +69,11 @@ pub fn classify_pip(src_x: i32, src_y: i32, src_name: &str, dst_x: i32, dst_y: i
         ("?HPRX??", "hprx_g"),
         ("JHPRX?_CMUX_CORE_CMUX?", "hprx_cmux"),
         ("JHPRX??_CMUX_CORE_CMUX?", "hprx_cmux"),
+        // LFCPNX names its global HROW drivers per quadrant ({T,B}{L,R}HPRX<n>, e.g. TLHPRX2);
+        // LIFCL has no such names, and these come after all LIFCL patterns, so its classes are
+        // unchanged
+        ("??HPRX?", "hprx_g"),
+        ("??HPRX??", "hprx_g"),
     ];
 
     static CIB_PRIMS: &[(&'static str, &'static str)] = &[
