@@ -88,11 +88,17 @@ struct Unpack {
     bitstream: String,
     /// output FASM file.
     fasm: String,
+    /// read the database from this directory instead of the one built in.
+    #[clap(long)]
+    db: Option<String>,
 }
 
 impl Unpack {
     pub fn run(&self) -> Result<()> {
-        let mut db = Database::new_builtin(DATABASE_DIR);
+        let mut db = match &self.db {
+            Some(root) => Database::new(root),
+            None => Database::new_builtin(DATABASE_DIR),
+        };
         let chip = BitstreamParser::parse_file(&mut db, &self.bitstream).unwrap();
 
         let mut outfile = File::create(&self.fasm)?;
