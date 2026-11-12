@@ -125,6 +125,10 @@ class Device:
     # the same name supplies candidate arcs, all treated as setting no bits. An arc traced
     # through one is only accepted if the trace reaches the SDF source pin (kind "ref").
     REF_FAMILY = "LIFCL"
+    # LFCPNX tile types whose LIFCL namesake has a different layout: use the LIFCL tile type with
+    # the same layout instead (LFCPNX's right-edge LRAMs sit like LIFCL-17's, bel one column in)
+    REF_TILETYPE = {"LRAM_0": "LRAM_0_15K", "LRAM_1": "LRAM_0_15K", "LRAM_2": "LRAM_0_15K",
+                    "LRAM_3": None, "LRAM_4": None, "LRAM_5": None, "LRAM_6": None}
 
     def by_dst(self):
         """dst wire base name -> [(tiletype, dst_rel, src_rel, kind)] for fixed conns and zero-bit
@@ -135,7 +139,10 @@ class Device:
             for tt in self.tiles_of:
                 pips, conns = self.tiletype(tt)
                 if not pips and not conns:
-                    rp, rc = self.tiletype(tt, self.REF_FAMILY)
+                    ref_tt = self.REF_TILETYPE.get(tt, tt)
+                    if ref_tt is None:
+                        continue
+                    rp, rc = self.tiletype(ref_tt, self.REF_FAMILY)
                     if rp or rc:
                         self.ref_types.add(tt)
                         for to, fw, bits in rp + rc:
@@ -405,9 +412,9 @@ def parse_vo(fn):
         body = body.split("specify")[0]
         members = re.findall(r'^\s+\S+\s+(\\\S+ |[A-Za-z_][\w$]*)\s*\(', body, re.M)
         modules[name] = [unescape(x) for x in members]
-    # the top module is named after the design (top, top_large, ...): the largest module, as it
-    # instantiates every cell
-    top_name = max(bodies, key=lambda n: len(bodies[n]))
+    # the top module is named after the design (top, top_large, ...): the module with the most
+    # instances, as it instantiates every cell
+    top_name = max(modules, key=lambda n: len(modules[n]))
     top = bodies[top_name]
     del modules[top_name]
     member2cell, cell2ports = {}, {}
@@ -494,6 +501,40 @@ def pio_core(dev, pio):
     return "SEIO33"
 
 
+def _dsp_half(idx, letter):
+    n = {1: 0, 2: 1, 5: 2, 6: 3}.get(idx)
+    return None if n is None or letter not in "AB" else "{}{}".format("LH"["AB".index(letter)], n)
+
+
+def _dsp_reg18(idx, letter):
+    if idx not in (3, 7) or letter not in "ABCD":
+        return None
+    i = "ABCD".index(letter)
+    return "REG18_{}{}_{}".format("L" if idx == 3 else "H", i // 2, i % 2)
+
+
+def dsp_site_letter(inst):
+    """Radiant site letter of a DSP bel instance (inverse of DSP_BELS)."""
+    m = re.match(r'^REG18_[LH](\d)_(\d)$', inst)
+    if m:
+        return "ABCD"[int(m.group(1)) * 2 + int(m.group(2))]
+    m = re.match(r'^(?:PREADD9|MULT9)_([LH])\d$', inst)
+    if m:
+        return "AB"["LH".index(m.group(1))]
+    return ""
+
+
+# DSP bel instance names per site type: f(DSP tile index, site letter) -> instance name
+DSP_BELS = {
+    "PREADD9_CORE": lambda i, l: None if _dsp_half(i, l) is None else "PREADD9_" + _dsp_half(i, l),
+    "MULT9_CORE": lambda i, l: None if _dsp_half(i, l) is None else "MULT9_" + _dsp_half(i, l),
+    "MULT18_CORE": lambda i, l: {1: "MULT18_0", 2: "MULT18_1", 5: "MULT18_2", 6: "MULT18_3"}.get(i),
+    "REG18_CORE": _dsp_reg18,
+    "MULT18X36_CORE": lambda i, l: {3: "MULT18X36_0", 7: "MULT18X36_1"}.get(i),
+    "ACC54_CORE": lambda i, l: {3: "ACC54_0", 7: "ACC54_1"}.get(i),
+    "MULT36_CORE": lambda i, l: {7: "MULT36"}.get(i),
+}
+
 SLICE_PIN_WIRES = {"CLK": "JCLK_SLICE{s}", "LSR": "JLSR_SLICE{s}", "CE": "JCE_SLICE{s}",
                    "SEL": "JSEL_SLICE{s}", "FCI": "JFCI_SLICE{s}", "FCO": "JFCO_SLICE{s}",
                    "WCK": "JWCK_SLICE{s}", "WRE": "JWRE_SLICE{s}"}
@@ -510,6 +551,19 @@ def pin_keys(dev, cell_site, pin, routing, io_alias):
         r, c, s = int(m.group(1)), int(m.group(2)), m.group(3)
         w = SLICE_PIN_WIRES.get(pin, "J{p}_SLICE{s}").format(p=pin, s=s)
         return {("W", r, c, w)}
+    dm = re.match(r'^(?:([A-Z0-9]+_CORE)_)?([A-Z0-9]+_CORE)_R(\d+)C(\d+)([A-D]?)$', cell_site)
+    if dm and dm.group(2) in DSP_BELS:
+        # DSP sites (e.g. PREADD9_CORE_R19C100A): the bel sits one row above a DSP_[LR]_<n> tile,
+        # whose index selects the instance, as in prjoxide's bels.rs (L/H halves: site letter A/B;
+        # REG18: A-D)
+        btype, r, c, letter = dm.group(2), int(dm.group(3)), int(dm.group(4)), dm.group(5)
+        for tt in dev.tiles_at.get((r + 1, c), ()):
+            m = re.match(r'^DSP_[LR]_(\d+)$', tt)
+            if m:
+                name = DSP_BELS[btype](int(m.group(1)), letter)
+                if name:
+                    return {("W", r, c, "J{}_{}_{}".format(pin, btype, name))}
+        return set()
     gm = re.match(r'^([A-Z0-9_]+?)_R(\d+)C(\d+)$', cell_site)
     if gm and not PIO_RE.match(cell_site):
         # hard blocks: the timing report names sites <TYPE>_<TYPE>_R<r>C<c> (e.g.
@@ -568,11 +622,20 @@ def place_from_routing(dev, routing, arcs, site):
             if src[0] in site or dst[0] not in site:
                 continue
             names = slice_pin_names(src[1])
+            dsp_re = re.compile(r'^J{}_([A-Z0-9]+_CORE)_([A-Z0-9_]+)$'.format(re.escape(src[1])))
+
+            def is_src(k):
+                return k[0] == "W" and (k[3] in names or (dsp_re.match(k[3]) is not None and
+                                                          dsp_re.match(k[3]).group(1) in DSP_BELS))
             for dk in sorted(pin_keys(dev, site[dst[0]], dst[1], routing, {})):
-                path_ = routing.trace(dk, lambda k: k[0] == "W" and k[3] in names)
+                path_ = routing.trace(dk, is_src)
                 if path_:
                     k = path_[0][0]
-                    site[src[0]] = "SLICE_R{}C{}{}".format(k[1], k[2], names[k[3]])
+                    if k[3] in names:
+                        site[src[0]] = "SLICE_R{}C{}{}".format(k[1], k[2], names[k[3]])
+                    else:
+                        btype, inst = dsp_re.match(k[3]).groups()
+                        site[src[0]] = "{}_R{}C{}{}".format(btype, k[1], k[2], dsp_site_letter(inst))
                     changed = True
                     break
         if not changed:
