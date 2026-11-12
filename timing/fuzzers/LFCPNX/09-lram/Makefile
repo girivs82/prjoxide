@@ -1,5 +1,5 @@
 NAME=lram
-RUNS=1 2 3 4
+RUNS=1 2 3 4 5 6 7 8 9 10 11 12
 GENERATOR=gen_lram.py
 ALLOW_FAIL=false
 CLOCKS=clk[0] clk[1] clk[2] clk[3]

@@ -125,10 +125,10 @@ class Device:
     # the same name supplies candidate arcs, all treated as setting no bits. An arc traced
     # through one is only accepted if the trace reaches the SDF source pin (kind "ref").
     REF_FAMILY = "LIFCL"
-    # LFCPNX tile types whose LIFCL namesake has a different layout: use the LIFCL tile type with
-    # the same layout instead (LFCPNX's right-edge LRAMs sit like LIFCL-17's, bel one column in)
-    REF_TILETYPE = {"LRAM_0": "LRAM_0_15K", "LRAM_1": "LRAM_0_15K", "LRAM_2": "LRAM_0_15K",
-                    "LRAM_3": None, "LRAM_4": None, "LRAM_5": None, "LRAM_6": None}
+    # LFCPNX tile types whose LIFCL namesake does not fit: no candidates (LFCPNX's LRAMs are laid
+    # out differently, and even its right-edge ones, placed like LIFCL-17's, connect other pins;
+    # their connections are inferred from routed designs by tools/radiant-fuzz/infer_block_conns.py)
+    REF_TILETYPE = {"LRAM_{}".format(i): None for i in range(7)}
 
     def by_dst(self):
         """dst wire base name -> [(tiletype, dst_rel, src_rel, kind)] for fixed conns and zero-bit
@@ -613,8 +613,9 @@ def slice_pin_names(pin):
 
 
 def place_from_routing(dev, routing, arcs, site):
-    """Place SLICE cells that no timing report names: trace back from a placed sink pin until a
-    source slice pin of the right name is reached; its location is the source cell's site.
+    """Place cells that no timing report names: trace back from a placed sink pin until a source
+    pin of the right name (slice, DSP, EBR or LRAM output) is reached; its location is the source
+    cell's site.
     Repeated until nothing changes, so whole trees of LUTs feeding a placed cell get placed."""
     while True:
         changed = False
@@ -624,15 +625,20 @@ def place_from_routing(dev, routing, arcs, site):
             names = slice_pin_names(src[1])
             dsp_re = re.compile(r'^J{}_([A-Z0-9]+_CORE)_([A-Z0-9_]+)$'.format(re.escape(src[1])))
 
+            blk_re = re.compile(r'^J{}_((?:EBR|LRAM)_CORE)$'.format(re.escape(src[1])))
+
             def is_src(k):
-                return k[0] == "W" and (k[3] in names or (dsp_re.match(k[3]) is not None and
-                                                          dsp_re.match(k[3]).group(1) in DSP_BELS))
+                return k[0] == "W" and (k[3] in names or blk_re.match(k[3]) is not None or
+                                        (dsp_re.match(k[3]) is not None and
+                                         dsp_re.match(k[3]).group(1) in DSP_BELS))
             for dk in sorted(pin_keys(dev, site[dst[0]], dst[1], routing, {})):
                 path_ = routing.trace(dk, is_src)
                 if path_:
                     k = path_[0][0]
                     if k[3] in names:
                         site[src[0]] = "SLICE_R{}C{}{}".format(k[1], k[2], names[k[3]])
+                    elif blk_re.match(k[3]):
+                        site[src[0]] = "{}_R{}C{}".format(blk_re.match(k[3]).group(1), k[1], k[2])
                     else:
                         btype, inst = dsp_re.match(k[3]).groups()
                         site[src[0]] = "{}_R{}C{}{}".format(btype, k[1], k[2], dsp_site_letter(inst))
