@@ -31,7 +31,12 @@ tools/radiant-fuzz/docker/run-radiant.sh shell
 #     ./<version>_Radiant_lin.run --console --prefix /opt/lscc/radiant/2026.1
 #   (Lattice disabled the usual Qt-IFW options; --console installs the default
 #   set, ~49 GB. Device families you don't need, e.g. Avant ispfpga/ap6a00*,
-#   can be deleted afterwards while no Radiant process is running.)
+#   can be deleted afterwards while no Radiant process is running.
+#   Keep cae_library/synthesis and cae_library/simulation/verilog: LSE (the
+#   synthesis tool the timing fuzzers use) reads its device headers from the
+#   first and the *_sp.v "special primitive" models from the second, and fails
+#   with ERROR 30053003 / 30053009 without them. cae_library/ibis and
+#   cae_library/simulation/vhdl are not needed.)
 #   licence on the host at ~/lscc/radiant/2026.1/license/license.dat
 #   then: /work/prjoxide/tools/radiant-fuzz/docker/container-setup.sh
 ```

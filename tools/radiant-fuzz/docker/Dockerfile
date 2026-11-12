@@ -4,9 +4,10 @@
 FROM --platform=linux/amd64 ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+# python3-numpy/scipy: timing/util/solve_interconnect.py and the DSP timing generator
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git build-essential pkg-config \
-        python3 python3-dev python3-pip \
+        python3 python3-dev python3-pip python3-numpy python3-scipy \
         libxft2 libxext6 libxrender1 libxtst6 libxi6 libsm6 libice6 \
         libfreetype6 libfontconfig1 libglib2.0-0 libgl1 libxcb1 libx11-xcb1 \
         libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libnss3 libasound2 \
