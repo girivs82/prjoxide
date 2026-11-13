@@ -69,12 +69,12 @@ def denormalize(chip, tile, r, c, rel, global_locs=None):
     return found
 
 
-def conns_to_zero_bit_pips(tt, family="LFCPNX", ref_family="LIFCL"):
+def conns_to_zero_bit_pips(tt, family="LFCPNX", ref_family="LIFCL", ref_tt=None):
     """A forced arc that changes no bits is stored by the pip solver as a fixed connection. Where the reference family
     has that arc as an empty-bit pip (the zero-bit option of a mux, e.g. EBOUNCE -> H00R0000) and the
     sink has configurable pips in the LFCPNX tile too, store it as the reference does: a pip with no bits."""
     root = database.get_db_root()
-    lifcl = open(path.join(root, ref_family, "tiletypes", tt + ".ron")).read()
+    lifcl = open(path.join(root, ref_family, "tiletypes", (ref_tt or tt) + ".ron")).read()
     fn = path.join(root, family, "tiletypes", tt + ".ron")
     if not path.exists(fn):
         return

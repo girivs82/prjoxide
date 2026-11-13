@@ -34,10 +34,17 @@ INSTANCES = {
     "DLY40": "CIB_R74C70:DLY40",
     "PCLK_DLY_10": "CIB_R36C159:PCLK_DLY_10",
     "PCLK_DLY_20": "CIB_R39C159:PCLK_DLY_20",
+    "PCLK_DLY_60": "CIB_R39C0:PCLK_DLY_60",
+    "PCLK_DLY_70": "CIB_R36C0:PCLK_DLY_70",
     "DDR_OSC_R": "CIB_R72C159:DDR_OSC_R",
     "BMID_0_ECLK_1": "CIB_R74C73:BMID_0_ECLK_1",
     "BMID_1_ECLK_2": "CIB_R74C74:BMID_1_ECLK_2",
 }
+
+# LIFCL tile type to take the candidates from, where its name differs (on LIFCL-40 the left-edge
+# primary clock delay tiles share a tile with an RBB tile: PCLK_DLY_60_RBB_8, PCLK_DLY_70_RBB_6; on
+# LFCPNX-100 they are tiles of their own, and RBB_6 / RBB_8 are elsewhere on the left edge)
+LIFCL_NAME = {"PCLK_DLY_60": "PCLK_DLY_60_RBB_8", "PCLK_DLY_70": "PCLK_DLY_70_RBB_6"}
 
 # Per tile type: global bel -> R/C of its wires on LFCPNX-100 (found with --locate, 2026-11-11).
 # Bel names repeat between tile types (DLY40 and PCLK_DLY_10 both have I4_0..8), so this is
@@ -54,6 +61,9 @@ GLOBAL_LOCS = {
     "BMID_1_ECLK_2": {**_ECLK, "_BMID_CORE_BMIDMUX": (73, 73), "_ECLKLOGICMUXPLLFB_CORE_ECLKPLLFBR": (73, 75)},
     "DLY40": {"_I4_{}".format(i): (73, 70) for i in range(9)},
     "PCLK_DLY_10": {"_I4_{}".format(i): (36, 158) for i in range(9)},
+    # left edge, mirrored (--locate accepted only R39C1 for PCLK_DLY_60's I4 bels, 2026-11-13)
+    "PCLK_DLY_60": {"_I4_{}".format(i): (39, 1) for i in range(9)},
+    "PCLK_DLY_70": {"_I4_{}".format(i): (36, 1) for i in range(9)},
 }
 
 # Extra fuzz tiles: the ECLK muxes span the bottom-middle tile group, as on LIFCL (150-eclkroute
@@ -85,7 +95,7 @@ def locate(types, chip):
         seen = set()
         tile = INSTANCES[tt]
         r, c = map(int, tile.split(":")[0].split("_R")[1].split("C"))
-        for frm, to in sorted(tile_pips("LIFCL", tt)):
+        for frm, to in sorted(tile_pips("LIFCL", LIFCL_NAME.get(tt, tt))):
             gs = [w for w in (frm, to) if w.startswith("G:")]
             key = global_bel_suffix(gs[0][2:]) if gs else None
             if not gs or key in seen or any(global_bel_suffix(g[2:]) != key for g in gs):
@@ -118,7 +128,7 @@ def main():
         tile = INSTANCES[tt]
         r, c = map(int, tile.split(":")[0].split("_R")[1].split("C"))
         pips = []
-        for frm, to in sorted(tile_pips("LIFCL", tt) - (tile_pips("LFCPNX", tt) if have_ron(tt) else set())):
+        for frm, to in sorted(tile_pips("LIFCL", LIFCL_NAME.get(tt, tt)) - (tile_pips("LFCPNX", tt) if have_ron(tt) else set())):
             ov = OVERRIDES.get(tt, {})
             af, at = ([ov[w]] if w in ov else denormalize(chip, tile, r, c, w, GLOBAL_LOCS.get(tt, {}))
                       for w in (frm, to))
@@ -133,7 +143,7 @@ def main():
         cfg.setup(skip_specimen=True)
         fuzz_pip_list(cfg, pips, ignore_tiles=row_tap_tiles(tile))
     for tt in types:
-        conns_to_zero_bit_pips(tt)
+        conns_to_zero_bit_pips(tt, ref_tt=LIFCL_NAME.get(tt, tt))
 
 
 def row_tap_tiles(tile):
