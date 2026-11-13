@@ -304,6 +304,22 @@ class Routing:
         """Possible drivers of node k in this design: the pip(s) with bits set if there are any
         (they are authoritative), otherwise the arcs that leave no bits (fixed connections
         and zero-bit pips), otherwise an edge alias (see edge_aliases)."""
+        m = re.match(r'^JCLK(IN|OUT)_DLLDEL_CORE_(I\d)$', k[3]) if k[0] == "W" else None
+        if m:
+            # A primary clock pin reaches the LMID/RMID/TMID/BMID muxes through its DLLDEL: pad ->
+            # CLKIN (fixed connection), CLKIN -> CLKOUT (the DLLDEL, whose pass-through pip is set
+            # whether or not the design uses the DLLDEL), CLKOUT -> JPCLKT (fixed connection). The
+            # pip classes have no class for the hops into and through the DLLDEL, so the pad,
+            # CLKIN and CLKOUT are one node to the solver, and the pad -> JPCLKT hop takes the
+            # <pclk>_mid_entry class, as for the other clock entries.
+            if m.group(1) == "OUT":
+                a = ("W", k[1], k[2], "JCLKIN_DLLDEL_CORE_" + m.group(2))
+                self.alias.add((a, k))
+                return [a]
+            out = [s_ for s_, _ in self.fixed_drivers(k)]
+            for a in out:
+                self.alias.add((a, k))
+            return out
         if k in self.drv:
             return sorted(self.drv[k])
         fd = self.fixed_drivers(k)
@@ -319,28 +335,6 @@ class Routing:
             return self.cibtest_aliases(k)
         if k[0] == "HPBX":
             return self.tap_drivers(k)
-        m = re.match(r'^JCLKOUT_DLLDEL_CORE_(I\d)$', k[3]) if k[0] == "W" else None
-        if m:
-            # a primary clock pin reaches the LMID/RMID/TMID/BMID muxes through its DLLDEL, which
-            # passes CLKIN to CLKOUT when the design does not use it (in the bel, no routing arc);
-            # one node under two names, as for CIBTEST inputs
-            a = ("W", k[1], k[2], "JCLKIN_DLLDEL_CORE_" + m.group(1))
-            self.alias.add((a, k))
-            return [a]
-        m = re.match(r'^JCLKIN_DLLDEL_CORE_I\d$', k[3]) if k[0] == "W" else None
-        if m and not self.fixed_drivers(k):
-            # LFCPNX has no PCLK_DLY_60/70 tile types (the left-edge primary clock delay tiles), so
-            # the pad feeding a DLLDEL is not in the database: offer the input clock (INCK) of the
-            # left-edge pads within 10 rows; a trace only uses one if it reaches the arc's source
-            # pad (only PCLKT*_0 clock routes reach a DLLDEL)
-            out = []
-            for rr in range(k[1] - 10, k[1] + 11):
-                if any(tt.startswith("SYSIO") for tt in self.dev.tiles_at.get((rr, 0), ())):
-                    for letter in "AB":
-                        a = ("W", rr, 0, "JINCK_SIOLOGIC_CORE_IBASE_PIC_" + letter)
-                        out.append(a)
-                        self.alias.add((a, k))
-            return out
         m = re.match(r'^JINCK_(S?IOLOGIC)_CORE_(IBASE_PIC|I_GEARING_PIC_TOP)_([AB])$', k[3]) if k[0] == "W" else None
         if m and not self.fixed_drivers(k):
             # the IO logic's input clock is the pad's input passed through (inside the bel): the pad
