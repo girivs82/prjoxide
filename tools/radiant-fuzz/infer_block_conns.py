@@ -11,11 +11,13 @@ For every SDF interconnect arc of the designs that ends or starts at a block pin
   - from a block output pin: the undriven CIBTEST inputs near the block where the sink's route
     starts (backward from the sink pin) are candidates for the wire that pin drives.
 Per block pin, the candidates of all its arcs are intersected; a pin whose intersection is a
-single wire, agreed by at least MIN_ARCS arcs, gets that connection. Pins left with several candidates, or with none, are reported
-and not written.
+single wire, agreed by at least MIN_ARCS arcs, gets that connection. With --vote, a pin whose
+intersection is empty or ambiguous (one wrongly traced arc empties it) gets the wire that at least
+VOTE_SHARE of its arcs (and at least MIN_VOTE_ARCS) offer, if no other wire is offered by more than
+RUNNER_UP_SHARE of them. Other pins are reported and not written.
 
 Usage (in the container, PYTHONPATH with util/common and timing/util):
-  infer_block_conns.py <out.json> <design dir>... [--write]
+  infer_block_conns.py <out.json> <design dir>... [--write] [--vote]
 where a design dir is a timing fuzzer directory (its work/design_N.* and the
 timing/output/LFCPNX/<NAME>_N_9.* files are used).
 """
@@ -37,6 +39,9 @@ WINDOW = 16
 # CIB wires that can drive a block input: CIBMUX outputs and the control wires
 INPUT_WIRE_RE = re.compile(r'^J(CIBMUXOUT[A-D]\d|CE\d|LSR\d|CLK\d)$')
 MIN_ARCS = 2   # write a connection only when at least this many arcs agree on it
+VOTE_SHARE = 0.75       # --vote: share of a pin's arcs that must offer the chosen wire
+MIN_VOTE_ARCS = 3
+RUNNER_UP_SHARE = 0.5   # --vote: no other wire offered by more than this share
 
 
 def lram_tile(dev, r, c):
@@ -146,10 +151,12 @@ def write_conns(tt, conns):
 
 
 def main():
-    out_json, dirs, write = sys.argv[1], [a for a in sys.argv[2:] if a != "--write"], "--write" in sys.argv
+    out_json, write, vote = sys.argv[1], "--write" in sys.argv, "--vote" in sys.argv
+    dirs = [a for a in sys.argv[2:] if not a.startswith("--")]
     dev = E.Device(E.FAMILY, E.DEVICE)
     cands = {}            # (tile type, to, from) candidate sets per (site, pin, dir)
     counts = defaultdict(int)
+    votes = defaultdict(lambda: defaultdict(int))   # (tile type, pin, dir) -> candidate -> arcs offering it
     for d in dirs:
         name = re.search(r'^NAME=(\S+)', open(path.join(d, "Makefile")).read(), re.M).group(1)
         outdir = path.join(d, "..", "..", "..", "output", "LFCPNX")
@@ -213,19 +220,29 @@ def main():
                         continue
                     cands[key] = cs if key not in cands else cands[key] & cs
                     counts[key] += 1
+                    for c_ in cs:
+                        votes[key][c_] += 1
     result = defaultdict(list)
     report = {}
     for (tt, pin, dr), cs in sorted(cands.items()):
-        report["{} {} {}".format(tt, pin, dr)] = dict(arcs=counts[tt, pin, dr], candidates=sorted(cs))
-        if len(cs) == 1 and counts[tt, pin, dr] >= MIN_ARCS:
+        n = counts[tt, pin, dr]
+        ranked = sorted(votes[tt, pin, dr].items(), key=lambda kv: -kv[1])
+        rep = dict(arcs=n, candidates=sorted(cs), votes=[[list(c_), v] for c_, v in ranked[:4]])
+        if len(cs) == 1 and n >= MIN_ARCS:
             to, frm = next(iter(cs))
-            result[tt].append((to, frm, counts[tt, pin, dr]))
+            result[tt].append((to, frm, n))
+        elif vote and ranked and n >= MIN_VOTE_ARCS and ranked[0][1] >= VOTE_SHARE * n and \
+                (len(ranked) < 2 or ranked[1][1] <= RUNNER_UP_SHARE * n):
+            to, frm = ranked[0][0]
+            result[tt].append((to, frm, n))
+            rep["by_vote"] = True
+        report["{} {} {}".format(tt, pin, dr)] = rep
     json.dump(dict(conns={k: sorted(v) for k, v in result.items()}, report=report), open(out_json, "w"), indent=1)
     for tt in sorted(result):
         print("{}: {} pins resolved".format(tt, len(result[tt])))
         if write:
             write_conns(tt, [(to, frm) for to, frm, n in result[tt]])
-    amb = sum(1 for v in report.values() if len(v["candidates"]) != 1)
+    amb = sum(1 for v in report.values() if len(v["candidates"]) != 1 and not v.get("by_vote"))
     print("{} pins with several or no candidates".format(amb))
 
 
