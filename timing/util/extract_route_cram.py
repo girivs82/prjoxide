@@ -244,6 +244,11 @@ class Routing:
                 continue
             tile, _, rest = line.partition(".PIP.")
             tname, tt = tile.split("__", 1)
+            if tt.startswith("TAP_"):
+                # the readback image does not hold the TAP branch muxes where the (silicon-verified)
+                # tile grid puts them, so pips decoded from TAP tiles are not trusted; branch drivers
+                # come from tap_drivers instead
+                continue
             r, c = map(int, TILE_RC_RE.search(tname).groups())
             to, frm = self._split_pip(rest)
             dk, sk = wire_key(dev, r, c, tt, to), wire_key(dev, r, c, tt, frm)
@@ -312,7 +317,66 @@ class Routing:
             return fixed
         if k[0] == "W" and k[3].endswith("_CIBTEST"):
             return self.cibtest_aliases(k)
+        if k[0] == "HPBX":
+            return self.tap_drivers(k)
+        m = re.match(r'^JCLKOUT_DLLDEL_CORE_(I\d)$', k[3]) if k[0] == "W" else None
+        if m:
+            # a primary clock pin reaches the LMID/RMID/TMID/BMID muxes through its DLLDEL, which
+            # passes CLKIN to CLKOUT when the design does not use it (in the bel, no routing arc);
+            # one node under two names, as for CIBTEST inputs
+            a = ("W", k[1], k[2], "JCLKIN_DLLDEL_CORE_" + m.group(1))
+            self.alias.add((a, k))
+            return [a]
+        m = re.match(r'^JCLKIN_DLLDEL_CORE_I\d$', k[3]) if k[0] == "W" else None
+        if m and not self.fixed_drivers(k):
+            # LFCPNX has no PCLK_DLY_60/70 tile types (the left-edge primary clock delay tiles), so
+            # the pad feeding a DLLDEL is not in the database: offer the input clock (INCK) of the
+            # left-edge pads within 10 rows; a trace only uses one if it reaches the arc's source
+            # pad (only PCLKT*_0 clock routes reach a DLLDEL)
+            out = []
+            for rr in range(k[1] - 10, k[1] + 11):
+                if any(tt.startswith("SYSIO") for tt in self.dev.tiles_at.get((rr, 0), ())):
+                    for letter in "AB":
+                        a = ("W", rr, 0, "JINCK_SIOLOGIC_CORE_IBASE_PIC_" + letter)
+                        out.append(a)
+                        self.alias.add((a, k))
+            return out
+        m = re.match(r'^JINCK_(S?IOLOGIC)_CORE_(IBASE_PIC|I_GEARING_PIC_TOP)_([AB])$', k[3]) if k[0] == "W" else None
+        if m and not self.fixed_drivers(k):
+            # the IO logic's input clock is the pad's input passed through (inside the bel): the pad
+            # wire under another name, as for CIBTEST inputs
+            for tt in self.dev.tiles_at.get((k[1], k[2]), ()):
+                if tt.startswith("SYSIO"):
+                    pads = {fw for to, fw, bits in self.dev.tiletype(tt)[1]
+                            if fw.startswith("JPADDI_") and fw.endswith("_IO" + m.group(3))}
+                    out = [("W", k[1], k[2], p_) for p_ in sorted(pads)]
+                    for a in out:
+                        self.alias.add((a, k))
+                    if out:
+                        return out
+            return []
         return self.edge_aliases(k)
+
+    def tap_drivers(self, k):
+        """Driver of a clock branch (HPBX) wire. TAP settings cannot be read from readback images
+        (the TAP region of the readback frames is not laid out as in the tile grid, which loaded
+        bitstreams confirm on silicon), so use the TAP tile type's arcs: a left branch is driven
+        from the same TAP's right branch; a right branch from one of the spine (VPSX) wires its mux
+        can select, among those the design's SPINE tiles drive."""
+        _, r, tc, side, name = k
+        if side == "L":
+            return [("HPBX", r, tc, "R", name)]
+        out = []
+        for tt in self.dev.tiles_at.get((r, tc), ()):
+            if not tt.startswith("TAP_"):
+                continue
+            pips, _ = self.dev.tiletype(tt)
+            for to, fw, bits in pips:
+                if to == "BRANCH_R:" + name and fw.startswith("SPINE:"):
+                    s_ = wire_key(self.dev, r, tc, tt, fw)
+                    if s_ in self.drv:
+                        out.append(s_)
+        return sorted(set(out))
 
     def cibtest_aliases(self, k):
         """On LFCPNX a hard block's output (EBR, LRAM, DSP) reaches a CIB wire Jxx through that
