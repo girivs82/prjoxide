@@ -55,12 +55,17 @@ struct Pack {
     fasm: String,
     /// output bitstream.
     bitstream: String,
-
+    /// read the database from this directory instead of the one built in.
+    #[clap(long)]
+    db: Option<String>,
 }
 
 impl Pack {
     pub fn run(&self) -> Result<()> {
-        let mut db = Database::new_builtin(DATABASE_DIR);
+        let mut db = match &self.db {
+            Some(root) => Database::new(root),
+            None => Database::new_builtin(DATABASE_DIR),
+        };
         let parsed_fasm = ParsedFasm::parse(&self.fasm).unwrap();
 
         let mut chip = Chip::from_fasm(&mut db, &parsed_fasm, None);
