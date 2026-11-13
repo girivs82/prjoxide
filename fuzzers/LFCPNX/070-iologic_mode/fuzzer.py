@@ -42,6 +42,9 @@ def _retry_build(config, substs, prefix):
     errors += [l.strip() for l in r.stdout.splitlines() if "Segmentation fault" in l and "bitgen" in l]
     return os.path.exists(bitfile), errors
 def _robust_enum_setting(config, empty_bitfile, name, values, get_sv_substs, *args, **kwargs):
+    # ONLY_ENUM=<regex>: fuzz only the settings whose name matches (to redo some of them)
+    if os.environ.get("ONLY_ENUM") and not re.search(os.environ["ONLY_ENUM"], name):
+        return
     if kwargs.get("min_cover"):
         # callers using min_cover pass tuples to get_sv_substs; leave those alone
         return _fuzz_enum_setting(config, empty_bitfile, name, values, get_sv_substs, *args, **kwargs)
@@ -656,6 +659,11 @@ def main():
             else:
                 sig = ""
             return dict(mode=mode, cmt="//" if mode == "NONE" else "", config=config, site=site, s="S" if s else "", pinconn=pinconn, sig=sig)
+        def ddr(x, extra=""):
+            # DDRMODE value; NONE leaves DDRMODE unset (Radiant 2026.1 refuses DDRMODE=#OFF, which
+            # LIFCL's fuzzer used), so bits shared by every DDRMODE value are kept in the options
+            return None if x == "NONE" else ("DDRMODE", x + extra)
+
         modes = ["NONE", "IREG_OREG", "IDDRX1_ODDRX1"]
         if not s:
             modes += ["IDDRXN", "ODDRXN", "MIDDRXN_MODDRXN"]
@@ -667,9 +675,9 @@ def main():
             lambda x: get_substs(mode="IREG_OREG", kv=("SRMODE", x), glb=True), False)
         if not s:
             nonrouting.fuzz_enum_setting(cfg, empty, "{}.IDDRXN.DDRMODE".format(prim), ["NONE", "IDDRX2", "IDDR71", "IDDRX4", "IDDRX5"],
-                lambda x: get_substs(mode="IDDRXN", kv=("DDRMODE", "#OFF" if x == "NONE" else x)), False)
+                lambda x: get_substs(mode="IDDRXN", kv=ddr(x)), False)
             nonrouting.fuzz_enum_setting(cfg, empty, "{}.ODDRXN.DDRMODE".format(prim), ["NONE", "ODDRX2", "ODDR71", "ODDRX4", "ODDRX5"],
-                lambda x: get_substs(mode="ODDRXN", kv=("DDRMODE", "#OFF" if x == "NONE" else x)), False)
+                lambda x: get_substs(mode="ODDRXN", kv=ddr(x)), False)
 
         for sig in ("SCLKIN", "SCLKOUT", "CEIN", "CEOUT", "LSRIN", "LSROUT"):
             nonrouting.fuzz_enum_setting(cfg, empty, "{}.{}MUX".format(prim, sig), ["1" if sig[0:2] == "CE" else "0", sig, "INV"],
@@ -714,11 +722,11 @@ def main():
             lambda x: get_substs(mode="IREG_OREG", kv=("REGSET", x), scope="TSREG"), False)
         if not s:
             nonrouting.fuzz_enum_setting(cfg, empty, "{}.MIDDRXN.DDRMODE".format(prim), ["NONE", "MIDDRX2", "MIDDRX4"],
-                lambda x: get_substs(mode="MIDDRXN_MODDRXN", kv=("DDRMODE", "#OFF" if x == "NONE" else x), scope="MIDDRXN"), False)
+                lambda x: get_substs(mode="MIDDRXN_MODDRXN", kv=ddr(x), scope="MIDDRXN"), False)
             nonrouting.fuzz_enum_setting(cfg, empty, "{}.MODDRXN.DDRMODE".format(prim), ["NONE", "MOSHX2", "MOSHX4", "MODDRX2_DQSW", "MODDRX4_DQSW", "MODDRX2_DQSW270", "MODDRX4_DQSW270"],
-                lambda x: get_substs(mode="MIDDRXN_MODDRXN", kv=("DDRMODE", "#OFF" if x == "NONE" else x), scope="MODDRXN", dqs=True, pinconn=(".DOUT(sig), .LSRIN(sig)" if x != "#OFF" else "")), False)
+                lambda x: get_substs(mode="MIDDRXN_MODDRXN", kv=ddr(x), scope="MODDRXN", dqs=True, pinconn=(".DOUT(sig), .LSRIN(sig)" if x != "#OFF" else "")), False)
             nonrouting.fuzz_enum_setting(cfg, empty, "{}.MTDDRXN.DDRMODE".format(prim), ["NONE", "MTSHX2", "MTSHX4"],
-                lambda x: get_substs(mode="MIDDRXN_MODDRXN", kv=("DDRMODE", "#OFF" if x == "NONE" else x + " TOUTMUX:MTDDR"), scope="MTDDRXN"), False)
+                lambda x: get_substs(mode="MIDDRXN_MODDRXN", kv=ddr(x, " TOUTMUX:MTDDR"), scope="MTDDRXN"), False)
     import sys
     sel = [c for c in configs if not sys.argv[1:] or c[0] in sys.argv[1:]]
     fuzzloops.parallel_foreach(sel, per_config)
