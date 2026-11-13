@@ -33,6 +33,9 @@ def _retry_build(config, substs, prefix):
     errors = [l for l in r.stdout.splitlines() if re.match(r"ERROR <\d+>", l)]
     return os.path.exists(bitfile), errors
 def _robust_enum_setting(config, empty_bitfile, name, values, get_sv_substs, *args, **kwargs):
+    # ONLY_ENUM=<regex>: fuzz only the settings whose name matches (to redo some of them)
+    if os.environ.get("ONLY_ENUM") and not re.search(os.environ["ONLY_ENUM"], name):
+        return
     if kwargs.get("min_cover"):
         # callers using min_cover pass tuples to get_sv_substs; leave those alone
         return _fuzz_enum_setting(config, empty_bitfile, name, values, get_sv_substs, *args, **kwargs)
@@ -186,6 +189,20 @@ diffio_types = [
     ("HSTL15D_I", 1.5, None),
     ("HSUL12D", 1.2, None),
 ]
+DEFAULT_DRIVE = "DEFAULT"
+
+
+def drop_default_drive():
+    """Remove the DEFAULT_DRIVE helper option from the SEIO18 DRIVE enums."""
+    import glob
+    root = os.path.join(_database.get_db_root(), "LFCPNX", "tiletypes")
+    for fn in glob.glob(os.path.join(root, "SYSIO_B[345]_*.ron")):
+        t = open(fn).read()
+        t2 = re.sub(r'\n        "{}": \[[^\n]*\],'.format(DEFAULT_DRIVE), "", t)
+        if t2 != t:
+            open(fn, "w").write(t2)
+
+
 def main():
     def per_config(config):
         pio, site, cfg = config
@@ -246,16 +263,17 @@ def main():
         nonrouting.fuzz_enum_setting(cfg, empty, "PIO{}.SEIO18.BASE_TYPE".format(pio), all_se_types,
                 lambda x: get_substs(iotype=x), False, assume_zero_base=True)
 
-        nonrouting.fuzz_enum_setting(cfg, empty, "PIO{}.SEIO18.DRIVE_1V8".format(pio), ["2", "4", "8", "12", "50RS"],
-                lambda x: get_substs(iotype="OUTPUT_LVCMOS18H", kv=("DRIVE", x)), True)
-        nonrouting.fuzz_enum_setting(cfg, empty, "PIO{}.SEIO18.DRIVE_1V5".format(pio), ["2", "4", "8"],
-                lambda x: get_substs(iotype="OUTPUT_LVCMOS15H", kv=("DRIVE", x)), True)
-        nonrouting.fuzz_enum_setting(cfg, empty, "PIO{}.SEIO18.DRIVE_1V2".format(pio), ["2", "4", "8"],
-                lambda x: get_substs(iotype="OUTPUT_LVCMOS12H", kv=("DRIVE", x)), True)
-        nonrouting.fuzz_enum_setting(cfg, empty, "PIO{}.SEIO18.DRIVE_1V0".format(pio), ["2", "4"],
-                lambda x: get_substs(iotype="OUTPUT_LVCMOS10H", kv=("DRIVE", x)), True)
-        nonrouting.fuzz_enum_setting(cfg, empty, "PIO{}.SEIO18.DRIVE_HSUL12".format(pio), ["4", "6", "8"],
-                lambda x: get_substs(iotype="OUTPUT_HSUL12", kv=("DRIVE", x)), True)
+        # DRIVE: the design with DRIVE unset (Radiant's default, which the BASE_TYPE options were
+        # fuzzed with) is an extra sample, so bits that every DRIVE value changes from that default
+        # stay in the options (e.g. LVCMOS10H, whose 2 and 4 mA both clear F13B1 of the default);
+        # the helper option is removed from the database afterwards (drop_default_drive)
+        for drv, iot, vals in (("1V8", "OUTPUT_LVCMOS18H", ["2", "4", "8", "12", "50RS"]),
+                               ("1V5", "OUTPUT_LVCMOS15H", ["2", "4", "8"]),
+                               ("1V2", "OUTPUT_LVCMOS12H", ["2", "4", "8"]),
+                               ("1V0", "OUTPUT_LVCMOS10H", ["2", "4"]),
+                               ("HSUL12", "OUTPUT_HSUL12", ["4", "6", "8"])):
+            nonrouting.fuzz_enum_setting(cfg, empty, "PIO{}.SEIO18.DRIVE_{}".format(pio, drv), [DEFAULT_DRIVE] + vals,
+                    lambda x, iot=iot: get_substs(iotype=iot, kv=None if x == DEFAULT_DRIVE else ("DRIVE", x)), True)
 
         nonrouting.fuzz_enum_setting(cfg, empty, "PIO{}.SEIO18.PULLMODE".format(pio), ["NONE", "UP", "DOWN", "KEEPER"],
                 lambda x: get_substs(iotype="INPUT_LVCMOS18H", kv=("PULLMODE", x)), True)
@@ -313,5 +331,6 @@ def main():
             nonrouting.fuzz_enum_setting(cfg, empty, "PIO{}.DIFFIO18.DIFFTX_INV".format(pio), ["NORMAL", "INVERT"],
                             lambda x: get_substs(iotype="OUTPUT_LVDS", kv=("DIFFTX_INV", x)), False)
     fuzzloops.parallel_foreach(configs, per_config)
+    drop_default_drive()
 if __name__ == "__main__":
     main()
