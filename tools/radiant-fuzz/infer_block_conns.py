@@ -164,8 +164,8 @@ def main():
             port2site, pin2site = E.parse_pad(path.join(d, "work", "design_{}.tmp".format(i), "par.pad"))
             for cell, ports in cell2ports.items():
                 for p in ports:
-                    if p in port2site:
-                        site[cell] = port2site[p]
+                    if port2site.lookup(p):
+                        site[cell] = port2site.lookup(p)
             sdf = parse_sdf_file(vo[:-3] + ".sdf").cells["top"]
             arcs = [(tuple(E.unescape(x) for x in f.rsplit("/", 1)), tuple(E.unescape(x) for x in t.rsplit("/", 1)))
                     for f, t in sorted(sdf.interconnect.keys())]

@@ -203,7 +203,16 @@ def wire_key(dev, r, c, tt, rel):
 
 
 def key_name(dev, k, io_alias={}):
-    """R<r>C<c>_<name> wire name for solve_interconnect's classify_pip."""
+    """R<r>C<c>_<name> wire name for solve_interconnect's classify_pip (with LIFCL's bel names,
+    which classify_pip knows)."""
+    return _lifcl_names(_key_name(dev, k, io_alias))
+
+
+def _lifcl_names(w):
+    return w.replace("_DIFFIO18A_CORE_", "_DIFFIO18_CORE_").replace("_SEIO18A_CORE_", "_SEIO18_CORE_")
+
+
+def _key_name(dev, k, io_alias):
     if k in io_alias:
         return io_alias[k]
     if k[0] == "W":
@@ -292,9 +301,9 @@ class Routing:
         and zero-bit pips), otherwise an edge alias (see edge_aliases)."""
         if k in self.drv:
             return sorted(self.drv[k])
-        if k in self.extra:
-            return sorted(self.extra[k])
         fd = self.fixed_drivers(k)
+        if k in self.extra:
+            return sorted(self.extra[k] | {s_ for s_, _ in fd})
         for s_, kind in fd:
             if kind == "ref":
                 self.ref_edges.add((s_, k))
@@ -433,7 +442,8 @@ def parse_vo(fn):
 def parse_twr(fns, member2cell):
     """SDF cell -> site, from the Cell/Site column (and Path Begin/End lines) of timing reports."""
     site = {}
-    site_tok = re.compile(r'^(SLICE_R\d+C\d+[A-D]|[A-Z][A-Z0-9]*_R\d+C\d+\w*|(?:SEIO|DIFFIO)\w+)$')
+    site_tok = re.compile(r'^(SLICE_R\d+C\d+[A-D]|[A-Z][A-Z0-9]*_R\d+C\d+\w*|(?:SEIO|DIFFIO)\w+|'
+                          r'PLL_CORE_PLL_(?:LLC|LRC|ULC|URC)|DCC_DCC_[LRTBC]\d+|S?IOLOGIC_CORE_IOL_\w+)$')
 
     def add(name, s):
         inst = name.split("->")[0].rsplit("/", 1)[0]
@@ -464,13 +474,30 @@ def parse_twr(fns, member2cell):
     return site
 
 
+class PortSites(dict):
+    """port -> PIO site; the .pad report truncates long port names with '*', which match any
+    port they are a unique prefix of."""
+    def __init__(self):
+        super().__init__()
+        self.prefixes = {}
+
+    def lookup(self, port):
+        if port in self:
+            return self[port]
+        hits = [s for p, s in self.prefixes.items() if port.startswith(p)]
+        return hits[0] if len(hits) == 1 else None
+
+
 def parse_pad(fn):
     """(port -> PIO site, package pin -> PIO site) from par's .pad report."""
-    port2site, pin2site = {}, {}
+    port2site, pin2site = PortSites(), {}
     for line in open(fn):
         f = [x.strip() for x in line.split("|")]
         if len(f) > 5 and PIO_RE.match(f[4]):
-            port2site[f[1]] = f[4]
+            if f[1].endswith("*"):
+                port2site.prefixes[f[1][:-1]] = f[4]
+            else:
+                port2site[f[1]] = f[4]
             pin2site[f[2].split("/")[0]] = f[4]
     return port2site, pin2site
 
@@ -482,6 +509,34 @@ def pio_loc(dev, pio):
     return r, c, letter
 
 
+def block_site_at(dev, k):
+    """Radiant site name of the PLL or DCC whose pin wire is k (inverse of pin_keys)."""
+    m = re.match(r'^J\w+?_DCC_DCC(\d+)$', k[3])
+    if m:
+        for side, tts, (dx, dy) in (("L", ("LMID",), (0, 0)), ("R", ("RMID",), (-1, 0)),
+                                    ("T", ("TMID_0", "TMID_1"), (0, 0)),
+                                    ("B", ("BMID_0_ECLK_1", "BMID_1_ECLK_2"), (0, 0)),
+                                    ("C", ("CMUX_0", "CMUX_1_GSR", "CMUX_6", "CMUX_7"), (0, -1))):
+            if any((r + dy, c + dx) == (k[1], k[2]) for tt in tts for r, c in dev.tiles_of.get(tt, ())):
+                return "DCC_DCC_{}{}".format(side, m.group(1))
+        return None
+    for corner, (dx, dy) in PLL_OFFSETS.items():
+        if any((r + dy, c + dx) == (k[1], k[2]) for r, c in dev.tiles_of.get("GPLL_" + corner, ())):
+            return "PLL_CORE_PLL_" + corner
+    return None
+
+
+def pio_side(dev, r, c):
+    """<side><number> of the PIO at a SYSIO tile location (inverse of pio_loc)."""
+    if c == 0:
+        return "L{}".format(r)
+    if c == dev.max_col:
+        return "R{}".format(r)
+    if r == 0:
+        return "T{}".format(c)
+    return "B{}".format(c)
+
+
 def pio_cib(dev, pio):
     """The CIB next to a PIO, through which its pad wires reach the fabric."""
     side = PIO_RE.match(pio).group(1)
@@ -490,15 +545,19 @@ def pio_cib(dev, pio):
 
 
 def pio_core(dev, pio):
-    """IO bel type of a PIO: banks 3-5 are the 1.8V HP banks (DIFFIO18 on A, SEIO18 on B)."""
+    """IO bel type of a PIO: banks 3-5 are the 1.8V HP banks (LFCPNX DIFFIO18A on A, SEIO18A on B)."""
     r, c, letter = pio_loc(dev, pio)
     for tt in dev.tiles_at.get((r, c), ()):
         m = re.match(r'^SYSIO_B(\d+)', tt)
         if m:
             if int(m.group(1)) in (3, 4, 5):
-                return "DIFFIO18" if letter == "A" else "SEIO18"
+                return "DIFFIO18A" if letter == "A" else "SEIO18A"
             return "SEIO33"
     return "SEIO33"
+
+
+# LFCPNX PLL bel offsets (rel_x, rel_y) from the GPLL tiles, as in libprjoxide bels.rs
+PLL_OFFSETS = {"LLC": (1, 1), "URC": (-1, 0), "ULC": (0, 1), "LRC": (-1, 0)}
 
 
 def _dsp_half(idx, letter):
@@ -551,6 +610,27 @@ def pin_keys(dev, cell_site, pin, routing, io_alias):
         r, c, s = int(m.group(1)), int(m.group(2)), m.group(3)
         w = SLICE_PIN_WIRES.get(pin, "J{p}_SLICE{s}").format(p=pin, s=s)
         return {("W", r, c, w)}
+    pl = re.match(r'^PLL_CORE_PLL_(LLC|LRC|ULC|URC)$', cell_site)
+    if pl:
+        # the PLL bel: its GPLL tile plus the bel offset (rel_x, rel_y) from bels.rs
+        dx, dy = PLL_OFFSETS[pl.group(1)]
+        return {("W", r + dy, c + dx, "J{}_PLL_CORE_PLL_LMMI".format(pin))
+                for r, c in dev.tiles_of.get("GPLL_" + pl.group(1), ())}
+    dc = re.match(r'^DCC_DCC_([LRTBC])(\d+)$', cell_site)
+    if dc:
+        # DCCs sit at their side's MID tile (bels.rs make_dcc: R one column in, C one row up)
+        tts = {"L": ("LMID",), "R": ("RMID",), "T": ("TMID_0", "TMID_1"),
+               "B": ("BMID_0_ECLK_1", "BMID_1_ECLK_2"), "C": ("CMUX_0", "CMUX_1_GSR", "CMUX_6", "CMUX_7")}[dc.group(1)]
+        dx, dy = {"R": (-1, 0), "C": (0, -1)}.get(dc.group(1), (0, 0))
+        return {("W", r + dy, c + dx, "J{}_DCC_DCC{}".format(pin, dc.group(2)))
+                for tt in tts for r, c in dev.tiles_of.get(tt, ())}
+    im = re.match(r'^(S?)IOLOGIC_CORE_IOL_([LRTB]\d+[AB])$', cell_site)
+    if im:
+        # IO logic: at its PIO's SYSIO tile; HP banks have IOLOGIC_CORE_I_GEARING_PIC_TOP_<A/B>,
+        # the others SIOLOGIC_CORE_IBASE_PIC_<A/B>
+        r, c, letter = pio_loc(dev, "P" + im.group(2))
+        name = ("SIOLOGIC_CORE_IBASE_PIC_" if im.group(1) else "IOLOGIC_CORE_I_GEARING_PIC_TOP_") + letter
+        return {("W", r, c, "J{}_{}".format(pin, name))}
     dm = re.match(r'^(?:([A-Z0-9]+_CORE)_)?([A-Z0-9]+_CORE)_R(\d+)C(\d+)([A-D]?)$', cell_site)
     if dm and dm.group(2) in DSP_BELS:
         # DSP sites (e.g. PREADD9_CORE_R19C100A): the bel sits one row above a DSP_[LR]_<n> tile,
@@ -578,7 +658,8 @@ def pin_keys(dev, cell_site, pin, routing, io_alias):
         cr, cc = pio_cib(dev, cell_site)
         bel = "J{}_{}_CORE_IO{}".format(pin, pio_core(dev, cell_site), letter)
         if pin == "PADDI":
-            keys = {("W", cr, cc, PADDI_CIBTEST[letter])}
+            # into the fabric through the CIBTEST wire, into the IOLOGIC from the pad wire itself
+            keys = {("W", cr, cc, PADDI_CIBTEST[letter]), ("W", r, c, bel)}
         elif pin == "PADDO":
             # the pad output bel wire, driven from a CIBMUX output as the SYSIO tile type says
             # (per tile type: e.g. pad B from CIBMUXOUTB4 or CIBMUXOUTC0)
@@ -602,7 +683,8 @@ def pin_keys(dev, cell_site, pin, routing, io_alias):
                 keys |= {("W", cr, cc, to) for to, fw, bits in pips + conns
                          if to.endswith("_CIBTEST") and fw.startswith("JCIBMUXOUT")}
         for k in keys:
-            io_alias[k] = "R{}C{}_{}".format(r, c, bel)
+            if k[3].endswith("_CIBTEST"):
+                io_alias[k] = "R{}C{}_{}".format(r, c, bel)
         return keys
     return set()
 
@@ -626,9 +708,15 @@ def place_from_routing(dev, routing, arcs, site):
             dsp_re = re.compile(r'^J{}_([A-Z0-9]+_CORE)_([A-Z0-9_]+)$'.format(re.escape(src[1])))
 
             blk_re = re.compile(r'^J{}_((?:EBR|LRAM)_CORE)$'.format(re.escape(src[1])))
+            pll_re = re.compile(r'^J{}_PLL_CORE_PLL_LMMI$'.format(re.escape(src[1])))
+            dcc_re = re.compile(r'^J{}_DCC_DCC(\d+)$'.format(re.escape(src[1])))
+            iol_re = re.compile(r'^J{}_(S?)IOLOGIC_CORE_(?:IBASE_PIC|I_GEARING_PIC_TOP)_([AB])$'.format(
+                re.escape(src[1])))
 
             def is_src(k):
                 return k[0] == "W" and (k[3] in names or blk_re.match(k[3]) is not None or
+                                        iol_re.match(k[3]) is not None or
+                                        pll_re.match(k[3]) is not None or dcc_re.match(k[3]) is not None or
                                         (dsp_re.match(k[3]) is not None and
                                          dsp_re.match(k[3]).group(1) in DSP_BELS))
             for dk in sorted(pin_keys(dev, site[dst[0]], dst[1], routing, {})):
@@ -637,6 +725,14 @@ def place_from_routing(dev, routing, arcs, site):
                     k = path_[0][0]
                     if k[3] in names:
                         site[src[0]] = "SLICE_R{}C{}{}".format(k[1], k[2], names[k[3]])
+                    elif pll_re.match(k[3]) or dcc_re.match(k[3]):
+                        site[src[0]] = block_site_at(dev, k)
+                        if site[src[0]] is None:
+                            del site[src[0]]
+                            continue
+                    elif iol_re.match(k[3]):
+                        sio, letter = iol_re.match(k[3]).groups()
+                        site[src[0]] = "{}IOLOGIC_CORE_IOL_{}{}".format(sio, pio_side(dev, k[1], k[2]), letter)
                     elif blk_re.match(k[3]):
                         site[src[0]] = "{}_R{}C{}".format(blk_re.match(k[3]).group(1), k[1], k[2])
                     else:
@@ -661,8 +757,8 @@ def main():
     # IO cells: placement from the .pad file, by top-level port (or by package pin from the twr)
     for cell, ports in cell2ports.items():
         for p in ports:
-            if p in port2site:
-                site[cell] = port2site[p]
+            if port2site.lookup(p):
+                site[cell] = port2site.lookup(p)
     for cell, s in list(site.items()):
         m = re.match(r'^(?:SEIO|DIFFIO)\w*?_CORE_(\w+)$', s)
         if m and m.group(1) in pin2site:
