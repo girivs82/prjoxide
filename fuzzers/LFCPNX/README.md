@@ -42,5 +42,47 @@ strips any routing bits that could leak into PIO enums because of that;
 `100-ip-base`, `121-pll-ipconfig` and `140-bram-init` are kept for reference
 but cannot produce results with this Radiant for the reason above.
 
+## Bitstream frame order, TAP frames and LRAM (silicon-verified 2026-11-14)
+
+**Frame order.** Radiant writes LFCPNX configuration frames as the 32 IO frames
+at 0x8000, then one linear `LSC_PROG_INCR_RTI` run over every frame from
+address 0: the main array, then the 16 right-side IO frames, then the 16
+left-side IO frames, then the 42 TAP frames. There is no separate write at
+0x8020. prjoxide packs and unpacks this layout since f0a566f (linear write) and
+d734fc3 (order past the main array: right IO, left IO, TAP). So:
+
+- bitstreams packed before f0a566f wrote the TAP frames at 0x8020, which never
+  took effect: every global clock branch stayed at its default;
+- bitstreams packed with f0a566f (before d734fc3) had the TAP and left-IO frames
+  swapped and are not usable;
+- decodes made before d734fc3 showed left-IO data as unknown bits in the TAP
+  tiles, and TAP data as left-IO bits.
+
+The TAP model in the database (LIFCL-derived) is correct: Radiant's bitstreams
+decode with no unknown TAP bits. Its settings now take effect for the first
+time. The TAP A/B of 2026-11-13 was invalid, because those bits never reached
+the chip. With d734fc3, an LRAM design clocked on spine 2 through the TAP
+branches works on silicon.
+
+**Readback images** (`RBK_MODE=1`) hold the 32 IO frames, then the same linear
+run, but it stops after TAP frame 9. So they contain only TAP frames 0-9 of 42,
+and TAP settings cannot be fuzzed from readback images.
+
+**LRAM**, confirmed on an LFCPNX-100 Versa board:
+
+- Init base addresses 0x2E200000 + k * 0x20000, k = 0..6 = R21C158, R41C158,
+  R57C158, R1C90, R1C105, R1C110, R1C125 (LRAM_0..6). These were taken from
+  Radiant's own bitstream (`LFCPNX-100/baseaddr.json`).
+- The init layout is as on LIFCL: 81920 bytes per LRAM, written as 5-byte bus
+  frames at bus addresses base + 0 and base + 0x8000. Unpack has stored these at
+  logical byte addresses since e965752; before that it lost 8 KB per LRAM.
+- DPS and BENA_N0-3 must be driven by a real constant-0 net, as Radiant does: a
+  routed net from a LUT with INIT = 0. Left at the CIB default (VCC), every read
+  returns zero. A slice left blank does not supply 0: LUT INIT bits are stored
+  inverted, so a blank LUT outputs 1.
+- The connections of the control, test and status pins (DPS, IGN, INITN,
+  STDBYN, TBISTN, SCANRST, OEA, OEB, ERRDET, LRAMREADY) are in the database
+  from fea45a2 on (`timing/fuzzers/LFCPNX/11-lram-core-pins`).
+
 Nothing Radiant-generated (bitstreams, udb, IP generator output, logs) is
 committed; only the derived database.
