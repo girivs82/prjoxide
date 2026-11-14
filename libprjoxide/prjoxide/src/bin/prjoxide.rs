@@ -96,6 +96,10 @@ struct Unpack {
     /// read the database from this directory instead of the one built in.
     #[clap(long)]
     db: Option<String>,
+    /// also write every set configuration bit of the whole CRAM (not only the bits inside
+    /// tiles) to this file, one "<flat frame index> <bit>" per line.
+    #[clap(long)]
+    frames: Option<String>,
 }
 
 impl Unpack {
@@ -105,6 +109,17 @@ impl Unpack {
             None => Database::new_builtin(DATABASE_DIR),
         };
         let chip = BitstreamParser::parse_file(&mut db, &self.bitstream).unwrap();
+
+        if let Some(frames) = &self.frames {
+            let mut ff = File::create(frames)?;
+            for f in 0..chip.cram.frames {
+                for b in 0..chip.cram.bits {
+                    if chip.cram.get(f, b) {
+                        writeln!(ff, "{} {}", f, b)?;
+                    }
+                }
+            }
+        }
 
         let mut outfile = File::create(&self.fasm)?;
 
