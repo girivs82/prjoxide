@@ -322,7 +322,22 @@ impl Chip {
     }
     // Convert frame address to flat frame index
     pub fn frame_addr_to_idx(&self, addr: u32) -> usize {
+        let main_frames = self.cram.frames - (32 + self.tap_frame_count);
         match addr {
+            // LFCPNX: Radiant writes every frame in one linear run from address 0. Past the main
+            // array the run continues through the right-side IO frames (as 0x8000..), then the
+            // left-side IO frames (as 0x8010..), then the TAP frames (as 0x8020..), each in the
+            // same order as its own address block.
+            a if self.family == "LFCPNX" && (a as usize) >= main_frames && (a as usize) < self.cram.frames => {
+                let j = (a as usize) - main_frames;
+                if j < 16 {
+                    self.frame_addr_to_idx(0x8000 + j as u32)
+                } else if j < 32 {
+                    self.frame_addr_to_idx(0x8010 + (j - 16) as u32)
+                } else {
+                    self.frame_addr_to_idx(0x8020 + (j - 32) as u32)
+                }
+            }
             0x0000..=0x7FFF => (self.cram.frames - 1) - (addr as usize),
             0x8000..=0x800F => (15 - ((addr - 0x8000) as usize)) + (16 + self.tap_frame_count), // right side IO
             0x8010..=0x801F => (15 - ((addr - 0x8010) as usize)) + 0,  // left side IO
