@@ -492,6 +492,8 @@ Please make sure Oxide and nextpnr are up to date. If they are, consider reporti
             return "PCIE_CORE";
         } else if ip.starts_with("LRAM_") {
             return "LRAM_INIT";
+        } else if ip.starts_with("PCS_LANE") {
+            return "PCS_LANE";
         } else {
             panic!("no IP data for {}", ip);
         }
@@ -535,6 +537,13 @@ Please make sure Oxide and nextpnr are up to date. If they are, consider reporti
                     }
                 }
                 return;
+            }
+            // Fixed bits: an IP type's always_on bits give the value (1, or 0 if inverted) of every
+            // register bit no word or enum covers, and the hardware default of the bits in each
+            // byte the block writes, so that writing a byte never clears bits the FASM does not set.
+            // Words and enums below override them.
+            for bit in tdb.always_on.iter() {
+                self.set_ip_bit(baseaddr, bit.frame as u32, bit.bit as u32, !bit.invert);
             }
             // Enums
             for (k, v) in ft

@@ -460,8 +460,13 @@ impl BitstreamParser {
         if curr_chunk.is_some() {
             chunks.push(curr_chunk.unwrap());
         }
-        // PLL bits are written seperately, in reverse order for some reason
-        for (&addr, &val) in c.ipconfig.iter().filter(|(&a, _)| a & 0xFF000000 == 0x0E000000 ).rev() {
+        // PLL and SERDES (PCS lane) bits are written one byte at a time, in descending order of
+        // (address bits 8-15, address), as Radiant does: for the PCS lane blocks (offsets up to
+        // 0x1FF) that is every lane's offsets 0x100.. first, then the lower ones; for the PLLs
+        // (offsets below 0x100) it is plain descending order.
+        let mut e: Vec<(u32, u8)> = c.ipconfig.iter().filter(|(&a, _)| a & 0xFF000000 == 0x0E000000 ).map(|(&a, &v)| (a, v)).collect();
+        e.sort_by_key(|&(a, _)| std::cmp::Reverse(((a & 0xFF00) >> 8, a)));
+        for (addr, val) in e {
             chunks.push((addr, vec![val]))
         }
         // Write out chunks
