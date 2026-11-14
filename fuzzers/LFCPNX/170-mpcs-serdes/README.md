@@ -55,3 +55,25 @@ block, including bytes at their default). Flags byte as for the other bus writes
    "The valid ones are {...}"); two-valued ones pattern-coded (`mkpat_enum.py`, `solve_enum.py`),
    others one value per build (`solve_multi2.py`, against the packed baseline).
 5. `write_db.py`, then `packtest.py` over all builds.
+
+## SERDES balls (LFCPNX-100, LFG672)
+
+From the pad report of 4-lane MPCS builds (lanes 0-3 and 4-7). Lane n is `SD<n>`; quad 0 is lanes
+0-3 (pad bank 80), quad 1 lanes 4-7 (bank 81). Each lane also has REXT/REFRET balls.
+
+| lane | TXDP / TXDN | RXDP / RXDN |
+|---|---|---|
+| SD0 | F26 / E26 | G24 / G25 |
+| SD1 | C26 / B26 | E24 / D25 |
+| SD2 | A25 / A24 | C24 / B23 |
+| SD3 | A22 / A21 | C21 / C22 |
+| SD4 | A18 / A17 | B20 / B19 |
+| SD5 | A15 / A14 | C16 / B16 |
+| SD6 | A12 / A11 | B13 / C12 |
+| SD7 | A9 / A8 | B10 / C10 |
+
+Quad reference clocks: `SDQ0_REFCLKP/N` F20 / E20, `SDQ1_REFCLKP/N` C14 / D13.
+
+On the CertusPro-NX Versa board (user guide FPGA-EB-02053, tables 8.1/8.7): the 10G SFP5 cage and SMAs
+J6/J3 (TX), J2/J5 (RX) are lane SD4; SFP6 and SMAs J11/J9 (TX), J8/J10 (RX) are lane SD5; the 161.1328 MHz
+oscillator is quad 1's reference clock (C14/D13). The 1G SFP3/SFP4 cages are on general IO, not the SERDES.
