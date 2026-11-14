@@ -16,7 +16,16 @@ SITES = {
     "PCLK_DLY_20": ("CIB_R39C159:PCLK_DLY_20", (39, 158)),
     "PCLK_DLY_60": ("CIB_R39C0:PCLK_DLY_60", (39, 1)),
     "PCLK_DLY_70": ("CIB_R36C0:PCLK_DLY_70", (36, 1)),
+    # bottom edge (sites found with designs that place a DLLDEL at R73C68..79)
+    "DLY50": ("CIB_R74C68:DLY50", (73, 68)),
+    "DLY52": ("CIB_R74C69:DLY52", (73, 69)),
+    "DLY40": ("CIB_R74C70:DLY40", (73, 70)),
+    "BANKREF4_DLY42_DDR41": ("CIB_R74C77:BANKREF4_DLY42_DDR41", (73, 77)),
+    "DLY30": ("CIB_R74C78:DLY30", (73, 78)),
+    "DLY32": ("CIB_R74C79:DLY32", (73, 79)),
 }
+# setting name suffix per tile type (DLLDEL10 for PCLK_DLY_10, DLLDEL42 for BANKREF4_DLY42_DDR41, ...)
+DLL_NAME = {"BANKREF4_DLY42_DDR41": "42"}
 # setting names as LIFCL's (DLLDEL10 for PCLK_DLY_10, ...)
 
 
@@ -25,12 +34,12 @@ def main():
 
     def per_tt(tt):
         tile, (r, c) = SITES[tt]
-        cfg = FuzzConfig(job="DLL" + tt[-2:], device="LFCPNX-100", sv="../shared/empty_100.v", tiles=[tile])
+        cfg = FuzzConfig(job="DLL" + DLL_NAME.get(tt, tt[-2:]), device="LFCPNX-100", sv="../shared/empty_100.v", tiles=[tile])
         cfg.setup()
         empty = cfg.build_design(cfg.sv, {})
         cfg.sv = "dlldel_100.v"
         site = "DLLDEL_CORE_R{}C{}".format(r, c)
-        dd = tt[-2:]
+        dd = DLL_NAME.get(tt, tt[-2:])
 
         def get_substs(mode="DLLDEL_CORE", kv=None, mux=False):
             if kv is None:

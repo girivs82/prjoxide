@@ -39,12 +39,23 @@ INSTANCES = {
     "DDR_OSC_R": "CIB_R72C159:DDR_OSC_R",
     "BMID_0_ECLK_1": "CIB_R74C73:BMID_0_ECLK_1",
     "BMID_1_ECLK_2": "CIB_R74C74:BMID_1_ECLK_2",
+    "DLY50": "CIB_R74C68:DLY50",
+    "DLY52": "CIB_R74C69:DLY52",
+    "BANKREF4_DLY42_DDR41": "CIB_R74C77:BANKREF4_DLY42_DDR41",
+    "DLY30": "CIB_R74C78:DLY30",
+    "DLY32": "CIB_R74C79:DLY32",
 }
 
 # LIFCL tile type to take the candidates from, where its name differs (on LIFCL-40 the left-edge
 # primary clock delay tiles share a tile with an RBB tile: PCLK_DLY_60_RBB_8, PCLK_DLY_70_RBB_6; on
 # LFCPNX-100 they are tiles of their own, and RBB_6 / RBB_8 are elsewhere on the left edge)
-LIFCL_NAME = {"PCLK_DLY_60": "PCLK_DLY_60_RBB_8", "PCLK_DLY_70": "PCLK_DLY_70_RBB_6"}
+LIFCL_NAME = {"PCLK_DLY_60": "PCLK_DLY_60_RBB_8", "PCLK_DLY_70": "PCLK_DLY_70_RBB_6",
+              # the bottom-edge DLLDELs, which LIFCL-40 has in SYSIO tiles
+              "DLY50": "SYSIO_B4_0_DLY50", "DLY52": "SYSIO_B4_1_DLY52", "BANKREF4_DLY42_DDR41": "SYSIO_B4_0_DLY42",
+              "DLY30": "SYSIO_B3_0_DLY30_V18", "DLY32": "SYSIO_B3_1_DLY32"}
+# of a candidate tile type that is a merged tile on LIFCL, only these arcs (the DLLDEL's)
+PIP_FILTER = {tt: (lambda frm, to: any(k in frm + to for k in ("DLLDEL", "_I4_")))
+              for tt in ("DLY50", "DLY52", "BANKREF4_DLY42_DDR41", "DLY30", "DLY32")}
 
 # Per tile type: global bel -> R/C of its wires on LFCPNX-100 (found with --locate, 2026-11-11).
 # Bel names repeat between tile types (DLY40 and PCLK_DLY_10 both have I4_0..8), so this is
@@ -64,6 +75,9 @@ GLOBAL_LOCS = {
     # left edge, mirrored (--locate accepted only R39C1 for PCLK_DLY_60's I4 bels, 2026-11-13)
     "PCLK_DLY_60": {"_I4_{}".format(i): (39, 1) for i in range(9)},
     "PCLK_DLY_70": {"_I4_{}".format(i): (36, 1) for i in range(9)},
+    # bottom-edge DLLDELs: the I4 code muxes at the DLLDEL's site (R73, the tile's column), as DLY40's
+    **{tt: {"_I4_{}".format(i): (73, c) for i in range(9)}
+       for tt, c in (("DLY50", 68), ("DLY52", 69), ("BANKREF4_DLY42_DDR41", 77), ("DLY30", 78), ("DLY32", 79))},
 }
 
 # Extra fuzz tiles: the ECLK muxes span the bottom-middle tile group, as on LIFCL (150-eclkroute
@@ -129,6 +143,8 @@ def main():
         r, c = map(int, tile.split(":")[0].split("_R")[1].split("C"))
         pips = []
         for frm, to in sorted(tile_pips("LIFCL", LIFCL_NAME.get(tt, tt)) - (tile_pips("LFCPNX", tt) if have_ron(tt) else set())):
+            if tt in PIP_FILTER and not PIP_FILTER[tt](frm, to):
+                continue
             ov = OVERRIDES.get(tt, {})
             af, at = ([ov[w]] if w in ov else denormalize(chip, tile, r, c, w, GLOBAL_LOCS.get(tt, {}))
                       for w in (frm, to))
