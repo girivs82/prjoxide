@@ -62,9 +62,11 @@ pub fn classify_pip(src_x: i32, src_y: i32, src_name: &str, dst_x: i32, dst_y: i
         ("JCIBMUXIN??", "cibmuxi"),
         ("JCIBMUXOUT??", "cibmuxo"),
 
-        ("HPBX0?00", "hpbx"),
-        ("VPSX0?00", "vpsx"),
-        ("HPRX0?00", "hprx"),
+        // Clock tree wires by index: two digits, as the larger devices
+        // (LFCPNX) have spine and row wires numbered 10 and up (VPSX1100)
+        ("HPBX??00", "hpbx"),
+        ("VPSX??00", "vpsx"),
+        ("HPRX??00", "hprx"),
         ("?HPRX?", "hprx_g"),
         ("?HPRX??", "hprx_g"),
         ("JHPRX?_CMUX_CORE_CMUX?", "hprx_cmux"),
@@ -216,4 +218,21 @@ pub fn classify_pip(src_x: i32, src_y: i32, src_name: &str, dst_x: i32, dst_y: i
         return Some(format!("{}_cmux -> hprx_cmux", cmux_node));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_pip;
+
+    #[test]
+    fn clock_tree_wires_classify_at_every_index() {
+        for (src, dst, class) in [
+            ("HPRX0200", "VPSX0200", "hprx -> vpsx"),
+            ("HPRX1100", "VPSX1100", "hprx -> vpsx"),
+            ("VPSX1500", "HPBX0200", "vpsx -> hpbx"),
+            ("HPBX1200", "JCLK0", "hpbx -> clk"),
+        ] {
+            assert_eq!(classify_pip(0, 0, src, 0, 0, dst).as_deref(), Some(class));
+        }
+    }
 }
