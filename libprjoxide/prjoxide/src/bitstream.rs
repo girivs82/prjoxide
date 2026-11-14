@@ -789,9 +789,23 @@ impl BitstreamParser {
                         .as_mut()
                         .expect("got bus write without chip setup");
                     let byte_count = frame_count * chip.get_bus_frame_size(bus_addr);
-                    for _i in 0..byte_count {
-                        chip.ipconfig.insert(bus_addr, self.get_byte());
-                        bus_addr += 1;
+                    let ls = bus_addr & 0x1FFFF;
+                    if bus_addr & 0xFF000000 == 0x2E000000 && (ls * 10) % 8 == 0 {
+                        // LRAM: the bus addresses 8 bytes for every 10 data bytes (5-byte
+                        // frames). Store logical byte addresses, the inverse of the fixup in
+                        // write_ip_config, so that chunks written at bus +0 and +0x8000 don't
+                        // overlap and unpack -> pack round-trips.
+                        let mut addr = (bus_addr & 0xFFFE0000) | ((ls * 10) / 8);
+                        for _i in 0..byte_count {
+                            chip.ipconfig.insert(addr, self.get_byte());
+                            addr += 1;
+                        }
+                        bus_addr += ((byte_count * 8) / 10) as u32;
+                    } else {
+                        for _i in 0..byte_count {
+                            chip.ipconfig.insert(bus_addr, self.get_byte());
+                            bus_addr += 1;
+                        }
                     }
                     if cmp_crc {
                         self.check_crc16();
