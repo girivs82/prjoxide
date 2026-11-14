@@ -166,6 +166,16 @@ impl BitstreamParser {
         // Write main frames
         b.write_byte(LSC_INIT_ADDRESS);
         b.write_zeros(3);
+        if ch.family == "LFCPNX" && !compress {
+            // LFCPNX (as Radiant writes it): one linear run over every frame from address 0.
+            // After the main frames it reaches the right-side IO frames and then the TAP frames,
+            // in the order frame_addr_to_idx gives for addresses past the main array; its last
+            // 16 frames (where the left-side IO frames sit in the flat index) are written as
+            // zeros, as Radiant does, since those were written through 0x8010 already. There is
+            // no separate write at 0x8020.
+            b.write_frames_ext(ch, 0x0000, ch.data.frames, 16);
+            b.write_padding(17);
+        } else {
         if compress {
             b.write_comp_frames(ch, 0x0000, ch.data.frames - (32 + ch.tap_frame_count));
         } else {
@@ -180,6 +190,7 @@ impl BitstreamParser {
             b.write_frames(ch, 0x8020, ch.tap_frame_count);
         }
         b.write_padding(17);
+        }
         // Write power control
         b.write_byte(LSC_POWER_CTRL);
         b.write_zeros(2);
@@ -333,6 +344,10 @@ impl BitstreamParser {
         self.write_u32(addr);
     }
     fn write_frames(&mut self, c: &Chip, start_addr: u32, count: usize) {
+        self.write_frames_ext(c, start_addr, count, 0);
+    }
+    // As write_frames, but frames whose flat index is below zero_below are written as zeros
+    fn write_frames_ext(&mut self, c: &Chip, start_addr: u32, count: usize, zero_below: usize) {
         self.write_byte(LSC_PROG_INCR_RTI);
         self.write_byte(0x91); // frame load settings
         self.write_u16(count.try_into().unwrap());
@@ -349,7 +364,7 @@ impl BitstreamParser {
             }
             for j in (0..bits_per_frame).rev() {
                 let ofs = (j + pad_bits) as usize;
-                let value = c.cram.get(frame_idx, j);
+                let value = frame_idx >= zero_below && c.cram.get(frame_idx, j);
                 self.update_ecc(value);
                 if value {
                     frame_bytes[(total_frame_bytes - 1) - (ofs / 8)] |= 1 << (ofs % 8);
