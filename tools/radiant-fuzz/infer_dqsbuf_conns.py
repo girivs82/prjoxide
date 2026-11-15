@@ -17,6 +17,9 @@ inferred and written relative to the bank's reference tile (BANK_REF below, the 
 BANK<n>.IVREF), with the pin wires J<pin>_IVREF_CORE in that tile.
 
 --check: compare the DQSBUFA pins inferred with the connections already in the database.
+--replace: for DQSBUFA input pins resolved unanimously by at least MIN_REPLACE_ARCS arcs, replace the
+database's connection of that pin (from LIFCL) with the inferred one; pins Radiant does not
+contradict are left as they are.
 
 Usage (in the container, PYTHONPATH with util/common, util/fuzz and timing/util):
   infer_dqsbuf_conns.py <out.json> <design dir>... [--write] [--vote] [--check]
@@ -44,6 +47,25 @@ def bank_of(c):
     return 5 if c < 48 else 4 if c < 108 else 3
 
 
+MIN_REPLACE_ARCS = 10
+
+
+def replace_conns(tt, conns):
+    """Set the driver of each pin wire in conns to the inferred wire (other entries are kept)."""
+    import database
+    fn = path.join(database.get_db_root(), "LFCPNX", "tiletypes", tt + ".ron")
+    t = open(fn).read()
+    for to, frm in conns:
+        pat = re.compile(r'(\n    "%s": \[\n)(.*?)(\n    \],)' % re.escape(to), re.S)
+        new_body = '      (\n        from_wire: "{}",\n      ),'.format(frm)
+        t2, n = pat.subn(lambda m: m.group(1) + new_body + m.group(3), t, count=1)
+        if n != 1:
+            raise RuntimeError("{}: no connection entry for {}".format(tt, to))
+        t = t2
+    open(fn, "w").write(t)
+    print("  {}: {} connections replaced".format(tt, len(conns)))
+
+
 def dqs0_tile(dev, r, c):
     for tt in dev.tiles_at.get((r + 1, c + 3), ()):
         if re.match(r'SYSIO_B[345]_1_DQS0', tt):
@@ -54,6 +76,7 @@ def dqs0_tile(dev, r, c):
 def main():
     out_json = sys.argv[1]
     write, vote, check = "--write" in sys.argv, "--vote" in sys.argv, "--check" in sys.argv
+    replace = "--replace" in sys.argv
     dirs = [a for a in sys.argv[2:] if not a.startswith("--")]
     dev = E.Device(E.FAMILY, E.DEVICE)
     cands, counts = {}, defaultdict(int)
@@ -158,6 +181,16 @@ def main():
     if write:
         for tt in sorted(result):
             B.write_conns(tt, [(to, frm) for to, frm, n, blk in result[tt] if blk == "IVREF_CORE"])
+    if replace:
+        for tt in sorted(result):
+            unan = []
+            for to, frm, n, blk in result[tt]:
+                rep = report["{} {} {}".format(tt, blk, re.match(r'N1W5:J(.*)_DQSBUFA_CORE_I_DQS_TOP', to).group(1))] \
+                    if blk == "DQSBUFA_CORE" else None
+                if rep and len(rep["candidates"]) == 1 and rep["votes"][0][1] == n and n >= MIN_REPLACE_ARCS:
+                    unan.append((to, frm))
+            if unan:
+                replace_conns(tt, unan)
     amb = sum(1 for v in report.values() if len(v["candidates"]) != 1 and not v.get("by_vote"))
     print("{} pins with several or no candidates".format(amb))
 

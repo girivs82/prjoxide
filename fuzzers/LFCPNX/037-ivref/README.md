@@ -54,12 +54,26 @@ To use the internal reference, a design needs, per bank with LVSTL inputs:
 - `write_db.py`: BANK<n>.IVREF. It creates nothing else; the DDR40_ECLK_L tile type file was
   created for the connections.
 
+## DQSBUFA input connections (replaced)
+
+The DQSBUFA input connections in SYSIO_B3/B4/B5_1_DQS0 came from LIFCL. Radiant's routing
+contradicts all 21 fabric inputs: RDCLKSEL0-3, RDDIR, RDLOADN, READ0-3, READMOVE, SELCLK, WRDIR,
+WRLOAD_N, WRLVDIR, WRLVLOAD_N, WRLVMOVE, WRMOVE, PAUSE, RST and RSTSMCNT. For example, RDDIR was
+`N1E2:JCIBMUXOUTD2` and is `N1W3:JCIBMUXOUTD7`.
+
+They are replaced with the inferred wires (`infer_dqsbuf_conns.py --replace`), the same on banks 3, 4
+and 5. Every pin is unanimous over 12 arcs (12 designs of 12-dqsbuf-ivref, one group per bank each),
+and no two pins share a source wire.
+
+Check on other designs: timing/fuzzers/LFCPNX/13-dqsbuf-phy-check puts the bank-3 PHY of
+156-dqsw-iologic (phy1 and four lane-moved variants) through the same flow. `--check` on those
+5 designs alone gives the same wire for 20 pins (5 arcs each). For RST, which in that PHY shares its
+net with every IOLOGIC reset, the trace leaves 9 LSR candidates; the new wire is among them, so
+nothing contradicts it. The DQSBUFA outputs to the fabric (BTDETECT, BURSTDETECT, DATAVALID,
+READCOUT, WRCOUT, WRLVCOUT, DQSWRD, RDPNTR, WRPNTR) still have LIFCL's connections and are
+unchecked.
+
 ## Not resolved here
 
-- **The DQSBUFA input connections already in the database** (SYSIO_B<n>_1_DQS0, from LIFCL)
-  disagree with these designs. For all 21 fabric inputs of DQSBUFA (RDDIR, READ*, RDCLKSEL*, ...),
-  the same inference gives a different CIBMUX wire, unanimous over 6 arcs and the same on banks 3,
-  4 and 5. For example, RDDIR: database `N1E2:JCIBMUXOUTD2`, inferred `N1W3:JCIBMUXOUTD7`. In a
-  Radiant-routed PHY the database's wire for RDDIR carries no route. Not changed here.
 - Bank 5, in a bank-5-only design: DOSCL_P18 F9B0 / F11B0 and DDR40_ECLK_L F102B1. These are
   probably the left DDRDLL / edge-clock path.
