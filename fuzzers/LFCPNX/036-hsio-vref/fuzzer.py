@@ -15,15 +15,15 @@ per PIO, on 032's 44 A/B pads (one per HP SYSIO tile-type pair):
 per bank (BANKREF tile):       BANK<n>.LVSTL  OFF / LVSTL_I / LVSTL_II
 chip-wide (DOSCL_P18):         LVSTL  OFF / LVSTL_I / LVSTL_II (the same bits for every HP bank)
 
-LVSTL inputs have no VREF bits at the pad: VREF1_LOAD / VREF2_LOAD (VREF1 is the default) only set
-F94B1 in the tile of the bank's VREF1 or VREF2 pin, which 032's VREF enum of that tile already
-decodes, so no LVSTL VREF enum is written.
+LVSTL inputs: VREF1_LOAD / VREF2_LOAD only set F94B1 in the tile of the bank's VREF1 or VREF2 pin
+(032's VREF enum of that tile decodes it); at the pad they equal OFF. VREF=VREF_INT, the internal
+reference Radiant's flow puts on LVSTL_I inputs and bidirs, is PIO<x>.SEIO18.VREF_LVSTL.
 
 The voltage-specific enums share bits with 032's (DRIVE_*, TERMINATION_*, SLEWRATE); the
 LFCPNX decoder keeps the one that matches the PIO's BASE_TYPE (lfcpnx_decode.rs). describe.py
 writes the descriptions.
 
-Usage: fuzzer.py [pio|bank]   (default: both)
+Usage: fuzzer.py [pio|bank|vref]   (default: all)
 """
 import importlib.util
 import os
@@ -55,6 +55,19 @@ def substs(site, iotype="BIDIR_LVSTL_I", kv=None, vcc="1.1"):
     extra = "".join(",{}={}".format(k, v) for k, v in (kv or []))
     prim = "DIFFIO18A_CORE" if iostd in LVSTL_DIFF else "SEIO18A_CORE"
     return dict(cmt="", pintype=pintype, primtype=prim, site=site, iotype=iostd, t=t, extra_config=extra, vcc=vcc)
+
+
+def fuzz_vref(config):
+    """VREF_LVSTL: LVSTL_I's internal input reference (VREF=VREF_INT; Radiant's flow sets it on LVSTL_I
+    inputs and bidirs). OFF, VREF1_LOAD and VREF2_LOAD have the same pad bits; VREF_INT on other IO types
+    sets no bits."""
+    pio, site, cfg = config
+    cfg.setup()
+    empty = cfg.build_design(cfg.sv, {})
+    cfg.sv = os.path.join(_here, "..", "032-hsio_mode", "iob_100.v")
+    nonrouting.fuzz_enum_setting(cfg, empty, "PIO{}.SEIO18.VREF_LVSTL".format(pio), ["OFF", "VREF_INT"],
+                                 lambda x: substs(site, "INPUT_LVSTL_I", [("VREF", x)]), False,
+                                 desc="LVSTL_I input reference: VREF_INT = the internal reference (VREF=VREF_INT)")
 
 
 def fuzz_pio(config):
@@ -109,12 +122,14 @@ def fuzz_bank(bank):
 
 
 def main():
-    what = sys.argv[1:] or ["pio", "bank"]
+    what = sys.argv[1:] or ["pio", "bank", "vref"]
     if "bank" in what:
         fuzzloops.parallel_foreach(list(BANKS), fuzz_bank)
     if "pio" in what:
         fuzzloops.parallel_foreach(hsio032.configs, fuzz_pio)
         hsio032.drop_default_drive()
+    if "vref" in what:
+        fuzzloops.parallel_foreach(hsio032.configs, fuzz_vref)
 
 
 if __name__ == "__main__":

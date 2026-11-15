@@ -21,10 +21,13 @@ existing one, so FASM that packed before packs to the same bitstream.
   - `TERMINATION_1V1`: OFF (= Radiant's default), 40, 48, 60, 80, 120 ohm, on inputs and bidirs.
     Radiant also accepts 50, 75 and 150, which set no termination bits and clear the F95 bit that
     OFF sets. Those three are recorded as options too; they have no set bits, so they never decode;
-  - VREF: an LVSTL input has no VREF bits at the pad (VREF1_LOAD, the default, VREF2_LOAD and OFF
-    give the same pad bits). The choice only shows as F94B1 in the tile of the bank's VREF1 or
-    VREF2 pin (SYSIO_B<n>_1_V18 for VREF1; _V18_32 / _V18_42 / _V18_51 for VREF2), which 032's
-    `VREF` enum of that tile already decodes. No LVSTL VREF enum is written.
+  - `VREF_LVSTL`: OFF or VREF_INT, the internal input reference (`VREF=VREF_INT`), which
+    Radiant's flow sets on every LVSTL_I input and bidir (pad report "VREF:VREF_INT"). VREF_INT is
+    PIOA F17B1+F74B0+F78B0 (first tile) and PIOB F74B0+F82B0+F86B0 (second tile), the same for
+    inputs and bidirs. VREF1_LOAD and VREF2_LOAD (and leaving VREF unset in the structural flow)
+    give the same pad bits as OFF; they only set F94B1 in the tile of the bank's VREF1 or VREF2 pin
+    (SYSIO_B<n>_1_V18 for VREF1; _V18_32 / _V18_42 / _V18_51 for VREF2), which 032's `VREF` enum
+    of that tile decodes. VREF_INT on HSUL12 and SSTL15_I is accepted but sets no bits.
 - **LVSTL_II**: BASE_TYPE options; DRIVE and TERMINATION are accepted but have no effect.
 - **LVSTLD_I / LVSTLD_II** (differential, on PIOA's DIFFIO18): BASE_TYPE options. The drive and
   termination of LVSTLD_I are those of LVSTL_I.
@@ -78,8 +81,8 @@ type; `describe.py` writes each enum's groups into its database description, as
 
 ## Run
 
-    fuzzer.py            # bank, then the 44 pads (about 1300 Radiant builds)
+    fuzzer.py            # bank, the 44 pads (about 1300 Radiant builds), then VREF_LVSTL (44)
     describe.py          # descriptions (bits untouched)
 
-`probe.py`, `probe2.py`, `probe3.py` and `probe4.py` are the exploratory builds the above is based
-on (one pad pair, value discovery, bank-level tiles).
+`probe.py` to `probe6.py` are the exploratory builds the above is based
+on (one pad pair, value discovery, bank-level tiles, VREF on LVSTL_I / HSUL12 / SSTL15_I).
