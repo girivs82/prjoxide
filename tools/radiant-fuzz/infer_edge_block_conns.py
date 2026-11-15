@@ -18,11 +18,19 @@ slice, so one pin's arcs may also show another pin's global). With --write each 
 written as G:<wire> <- the pin wire.
 
 Blocks (pin wires named as in LIFCL's tile types, relative to the block's tile):
-  adc  ADC_CORE_R68C158, tile ADC at the site's column + 1: W1:J<pin>_ADC_CORE_ADC0
-  osc  OSC_CORE_R1C137, tile EFB_1_OSC one row above the site: S1:J<pin>_OSC_CORE
+  adc       ADC_CORE_R68C158, tile ADC at the site's column + 1: W1:J<pin>_ADC_CORE_ADC0
+  osc       OSC_CORE_R1C137, tile EFB_1_OSC one row above the site: S1:J<pin>_OSC_CORE
+  eclksync  ECLKSYNC_CORE_R73C<c><A-D> (bank 3 / 4 / 5 at C74 / C73 / C72, edge clock 0-3), tile one
+            row below (BMID_1_ECLK_2 / BMID_0_ECLK_1 / ECLK_0): N1:J<pin>_ECLKSYNC_CORE_ECLKSYNC<bank>_<k>
+  eclkdiv   ECLKDIV_CORE_R73C<c><A-D>, the same tiles: N1:J<pin>_ECLKDIV_CORE_ECLKDIVB<bank>_<k>
+A cell pinned by the design's own `ldc_set_location -site {...} [get_cells ...]` constraint is at that
+site (it overrides the timing report); an unsited block cell gets the one block site the report names.
 
 Usage (in the container, PYTHONPATH with util/common, util/fuzz, timing/util and this directory):
   infer_edge_block_conns.py <block> <out.json> <design dir>... [--write] [--runs=A-B] [--clock-out=P,...]
+                            [--clock-sink=PIN,...]
+--clock-sink limits the clock-output trace to arcs into those sink pins (e.g. CLK of fabric registers;
+an IOLOGIC's SCLK pin key does not resolve to one route).
 """
 import glob
 import json
@@ -37,26 +45,37 @@ import infer_block_conns as B
 
 MIN_ARCS = 10
 
+ECLK_BANK = {74: 3, 73: 4, 72: 5}
+ECLK_TILES = {"ECLK_0", "BMID_0_ECLK_1", "BMID_1_ECLK_2"}
 BLOCKS = {
-    # site regex, tile type, (tile row - site row, tile col - site col), pin wire suffix, cell regex
-    "adc": (re.compile(r'^ADC_CORE(?:_ADC_CORE)?_R(\d+)C(\d+)$'), "ADC", (0, 1), "_ADC_CORE_ADC0",
-            re.compile(r'ADC_inst$')),
-    "osc": (re.compile(r'^OSC_CORE(?:_OSC_CORE)?_R(\d+)C(\d+)$'), "EFB_1_OSC", (-1, 0), "_OSC_CORE",
-            re.compile(r'OSCA_inst$')),
+    # site regex, tile types, (tile row - site row, tile col - site col), pin wire suffix (from the site
+    # match), marker of the block's pin wires (a backward trace stops there), cell regex
+    "adc": (re.compile(r'^ADC_CORE(?:_ADC_CORE)?_R(\d+)C(\d+)$'), {"ADC"}, (0, 1),
+            lambda m: "_ADC_CORE_ADC0", "_ADC_CORE_", re.compile(r'ADC_inst$')),
+    "osc": (re.compile(r'^OSC_CORE(?:_OSC_CORE)?_R(\d+)C(\d+)$'), {"EFB_1_OSC"}, (-1, 0),
+            lambda m: "_OSC_CORE", "_OSC_CORE", re.compile(r'OSCA_inst$')),
+    "eclksync": (re.compile(r'^ECLKSYNC_CORE(?:_ECLKSYNC_CORE)?_R(\d+)C(\d+)([A-D])$'), ECLK_TILES, (1, 0),
+                 lambda m: "_ECLKSYNC_CORE_ECLKSYNC{}_{}".format(ECLK_BANK[int(m.group(2))], "ABCD".index(m.group(3))),
+                 "_ECLKSYNC_CORE_", re.compile(r'ECLKSYNC_inst$')),
+    "eclkdiv": (re.compile(r'^ECLKDIV_CORE(?:_ECLKDIV_CORE)?_R(\d+)C(\d+)([A-D])$'), ECLK_TILES, (1, 0),
+                lambda m: "_ECLKDIV_CORE_ECLKDIVB{}_{}".format(ECLK_BANK[int(m.group(2))], "ABCD".index(m.group(3))),
+                "_ECLKDIV_CORE_", re.compile(r'ECLKDIV_inst$')),
 }
 
 
 def main():
     block = sys.argv[1]
-    site_re, tiletype, (dr, dc), suffix, cell_re = BLOCKS[block]
+    site_re, tiletypes, (dr, dc), suffix_of, marker, cell_re = BLOCKS[block]
     out_json, write = sys.argv[2], "--write" in sys.argv
-    runs, clock_out = None, []
+    runs, clock_out, clock_sink = None, [], None
     for a in sys.argv:
         if a.startswith("--runs="):
             lo, hi = a.split("=")[1].split("-")
             runs = set(range(int(lo), int(hi) + 1))
         if a.startswith("--clock-out="):
             clock_out = a.split("=")[1].split(",")
+        if a.startswith("--clock-sink="):
+            clock_sink = set(a.split("=")[1].split(","))
     dirs = [a for a in sys.argv[3:] if not a.startswith("--")]
     dev = E.Device(E.FAMILY, E.DEVICE)
     cands, counts = {}, defaultdict(int)
@@ -65,7 +84,10 @@ def main():
 
     def block_tile(r, c):
         tr, tc = r + dr, c + dc
-        return (tiletype, tr, tc) if tiletype in dev.tiles_at.get((tr, tc), ()) else None
+        for tt in dev.tiles_at.get((tr, tc), ()):
+            if tt in tiletypes:
+                return tt, tr, tc
+        return None
 
     for d in dirs:
         name = re.search(r'^NAME=(\S+)', open(path.join(d, "Makefile")).read(), re.M).group(1)
@@ -86,8 +108,13 @@ def main():
             for t_ in re.findall(r'\b[A-Z_]+_R\d+C\d+\b', open(path.join(d, "work", "design_{}.twr".format(i))).read()):
                 if site_re.match(t_):
                     twr_sites.add(t_)
+            pdc = path.join(d, "work", "design_{}.pdc".format(i))
+            pinned = dict((c_, s_) for s_, c_ in re.findall(r'ldc_set_location -site \{(\S+)\} \[get_cells (\S+)\]',
+                                                           open(pdc).read())) if path.exists(pdc) else {}
+            # a cell pinned by the design's constraints is at that site, whatever the report says
+            site.update({c_: s_ for c_, s_ in pinned.items() if c_ in cell2ports})
             for cell in cell2ports:
-                if cell_re.search(cell) and cell not in site and len(twr_sites) == 1:
+                if cell not in site and cell_re.search(cell) and len(twr_sites) == 1:
                     site[cell] = next(iter(twr_sites))
             port2site, pin2site = E.parse_pad(path.join(d, "work", "design_{}.tmp".format(i), "par.pad"))
             for cell, ports in cell2ports.items():
@@ -104,13 +131,22 @@ def main():
             def drv(k):
                 # the database's own pin connections of this block (if any) end a backward trace
                 return [s_ for s_ in routing.drivers(k)
-                        if not (s_[0] == "W" and isinstance(s_[3], str) and s_[3].endswith(suffix))]
+                        if not (isinstance(s_[-1], str) and marker in s_[-1])]
 
             # clock outputs: per SDF arc from the pin, the wires where the route to the clocked
             # register starts (wires of the decoded routing with no driver), traced backward
             for (scell, spin), (dcell, dpin) in arcs:
-                if spin not in clock_out or scell not in site or dcell not in site or not site_re.match(site[scell]):
+                if spin not in clock_out or scell not in site or dcell not in site:
                     continue
+                if clock_sink and dpin not in clock_sink:
+                    continue
+                m_ = site_re.match(site[scell])
+                if not m_:
+                    continue
+                t_ = block_tile(int(m_.group(1)), int(m_.group(2)))
+                if t_ is None:
+                    continue
+                inst = (t_[0], spin, suffix_of(m_), int(m_.group(1)), int(m_.group(2)), t_[1], t_[2])
                 roots = set()
                 for dk in E.pin_keys(dev, site[dcell], dpin, routing, {}):
                     seen, fr = {dk}, [dk]
@@ -123,7 +159,7 @@ def main():
                                     nx.append(s_)
                         fr = nx
                     roots |= {k for k in seen if not drv(k)}
-                clock_reach[spin].append(roots)
+                clock_reach[inst].append(roots)
 
             for src, dst in arcs:
                 for (cell, pin), other, is_input in ((dst, src, True), (src, dst, False)):
@@ -137,6 +173,7 @@ def main():
                     if t is None:
                         continue
                     tt, tr, tc = t
+                    suffix = suffix_of(m)
                     pin_w = ("W", r, c, "J{}{}".format(pin, suffix))
                     if is_input:
                         sk = frozenset(E.pin_keys(dev, site[other[0]], other[1], routing, {}))
@@ -163,7 +200,7 @@ def main():
                                    if B.near(k, r, c, dev) and not drv(k)}
                     if not cs:
                         continue
-                    key = (tt, pin, "in" if is_input else "out")
+                    key = (tt, pin + suffix, "in" if is_input else "out")
                     cands[key] = cs if key not in cands else cands[key] & cs
                     counts[key] += 1
                     for c_ in cs:
@@ -193,12 +230,13 @@ def main():
                 assigned[pin] = next(iter(left))
                 taken.add(assigned[pin])
                 changed = True
-    for pin, sets in clock_reach.items():
-        clocks[pin] = dict(arcs=len(sets), common=sorted(str(x) for x in common[pin]),
-                           conn=("G:" + assigned[pin][1]) if pin in assigned else None)
-        if clocks[pin]["conn"]:
-            result[tiletype].append((clocks[pin]["conn"], "{}:J{}{}".format(
-                {(-1, 0): "S1", (0, 1): "W1"}[(dr, dc)], pin, suffix), pin, "clock"))
+    for inst, sets in clock_reach.items():
+        tt, pin, sfx, r, c, tr, tc = inst
+        label = pin + sfx
+        clocks[label] = dict(arcs=len(sets), common=sorted(str(x) for x in common[inst]),
+                             conn=("G:" + assigned[inst][1]) if inst in assigned else None)
+        if clocks[label]["conn"]:
+            result[tt].append((clocks[label]["conn"], B.rel(("W", r, c, "J" + label), tr, tc), label, "clock"))
     json.dump(dict(conns={k: sorted(v) for k, v in result.items()}, report=report, clock_out=clocks),
               open(out_json, "w"), indent=1)
     for tt in sorted(result):

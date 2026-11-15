@@ -16,6 +16,10 @@
 #   GEAR=X2 builds X2 gearing instead of X4 (ODDRX2DQ / ODDRX2DQS / TSHX2DQ / TSHX2DQS / IDDRX2DQ,
 #   ECLKDIV 2, DQSBUF MODX=MDDRX2); for the X2 DDRMODE / DQSW_CLK bits of 156-dqsw-iologic.
 #   DQS_SE=1 makes every DQS pad single-ended (LVSTL_I), so a DQ can go on its complement pad.
+#   ECLK_IDX=0..3 pins the ECLKSYNC and the ECLKDIV to bank 4's edge clock of that index
+#   (ECLKSYNC_CORE_R73C73<A-D>, ECLKDIV_CORE_R73C73<A-D>); banks 3 / 5 get it through their cascade
+#   inputs. For the DQSBUF edge-clock input select (fuzzers/LFCPNX/153-dqsbuf/README.md).
+#   ECLK_COL=74|73|72 puts them in bank 3 / 4 / 5's edge-clock column instead of bank 4's.
 import random
 import sys
 
@@ -51,6 +55,11 @@ def sreg(n):
 
 
 ports = ["input refclk", "input d", "output q"]
+if os.environ.get("ECLK_IDX"):
+    _l = "ABCD"[int(os.environ["ECLK_IDX"])]
+    _c = os.environ.get("ECLK_COL", "73")
+    pdc += ["ldc_set_location -site {{ECLKSYNC_CORE_R73C{}{}}} [get_cells u_es.ECLKSYNC_inst]".format(_c, _l),
+            "ldc_set_location -site {{ECLKDIV_CORE_R73C{}{}}} [get_cells u_ed.ECLKDIV_inst]".format(_c, _l)]
 pdc += ["ldc_set_location -site {AB19} [get_ports refclk]",
         "ldc_set_port -iobuf {IO_TYPE=LVSTLD_I} [get_ports refclk]",
         "ldc_set_location -site {R5} [get_ports d]", "ldc_set_port -iobuf {IO_TYPE=LVCMOS33} [get_ports d]",

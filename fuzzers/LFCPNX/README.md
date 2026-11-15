@@ -120,14 +120,27 @@ to 0.
   left-side DDRDLL (DDRDLL_CORE_R68C1): the same bank 4 / 5 design built with the DDRDLL pinned to
   each side sets it on every DQS group only with the right one. No bit tells "left DDRDLL" from
   "tied to 0". The option keeps its name, DDRDLL.
-- `DQSBUF.DQSI` (SYSIO_B3_0_DQS3 F52B1): set in every such design. DQSI can only come from the
-  group's DQS pad (Radiant refuses a fabric source), so this bit is not separable from that
-  connection.
+- F52B1 in SYSIO_B3_0_DQS3 was first written as `DQSBUF.DQSI`, because it was set in every such
+  design. It is not DQSI: it is the low bit of the DQSBUF's edge-clock input select, and every
+  early design used edge clock 1. With the ECLKSYNC pinned to each edge clock, the select is
+  - ECLK0: no bits;
+  - ECLK1: F52B1;
+  - ECLK2: F51B1;
+  - ECLK3: both.
+
+  It is the same in the DQS3 tile of the bank 3, 4, bank-4 middle and bank 5 groups. It is written
+  as LIFCL's pips `N1W8:JECLKOUT_I_DQS_TOP_ECLK_ROUTING_MUX <- N1W8:JECLK<k>_I_...`, and the
+  DQSI enum is removed.
 
 None of the other inputs (RDCLKSEL, RDDIR, RDLOADN, READ, READMOVE, SELCLK, WRDIR, WRLOAD_N, WRLVDIR,
 WRLVLOAD_N, WRLVMOVE, WRMOVE) has a bit of its own. The same two bits were seen in banks 4 and 5
 (SYSIO_B4_0_DQS1 / _DQS3, SYSIO_B5_0_DQS1 / _DQS3, and the bank-4 middle group's
 SYSIO_B4_0_DQS1_MID / _DQS3_MID) and are written there too (`153-dqsbuf/write_phy_bits.py`).
+
+The DQSBUF's routing-mux and pin wires are named as in LIFCL (`N1W5:` from the DQS0 tile, 5 columns
+left). On LFCPNX-100, sv2udb accepts `JECLKOUT_I_DQS_TOP_ECLK_ROUTING_MUX` only at the DQSBUF site's
+column: 3 columns left of DQS0 in the normal groups (C146, C50, C2) and 1 in the middle group (C62).
+The names are labels in the database's graph (no bits depend on them), so they are left as they are.
 
 Bank 4's middle DQS group (tile types SYSIO_B4_*_DQS<k>_MID, C63-C67) is a group of its own: its
 DQS pad is PB66A (AF21), not PB64A, and its DQSBUFA is DQSBUFA_CORE_R73C62 (one column left of its

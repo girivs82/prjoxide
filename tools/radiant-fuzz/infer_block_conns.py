@@ -133,8 +133,11 @@ def write_conns(tt, conns):
     import database
     fn = path.join(database.get_db_root(), "LFCPNX", "tiletypes", tt + ".ron")
     t = open(fn).read()
+    if "\n  conns: {}," in t:
+        t = t.replace("\n  conns: {},", "\n  conns: {\n  },", 1)
     ci = t.index("\n  conns: {")
-    head, rest = t[:ci], t[ci:]
+    ce = t.index("\n  },\n", ci) + len("\n  },\n")
+    head, rest, tail = t[:ci], t[ci:ce], t[ce:]   # tail: always_on and the closing parenthesis
     have = defaultdict(list)
     for to, body in re.findall(r'\n    "([^"]+)": \[(.*?)\n    \],', rest, re.S):
         have[to] += re.findall(r'from_wire: "([^"]+)"', body)
@@ -146,7 +149,7 @@ def write_conns(tt, conns):
     body = "".join('    "{}": [\n{}    ],\n'.format(
         to, "".join('      (\n        from_wire: "{}",\n      ),\n'.format(fw) for fw in sorted(fws)))
         for to, fws in sorted(have.items()))
-    open(fn, "w").write(head + "\n  conns: {\n" + body + "  },\n)\n")
+    open(fn, "w").write(head + "\n  conns: {\n" + body + "  },\n" + tail)
     print("  {}: {} new conns written".format(tt, new))
 
 
