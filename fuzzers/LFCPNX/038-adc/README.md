@@ -78,7 +78,7 @@ is written only when one wire is left and all of at least 10 arcs agree.
     assignment follows LIFCL; both must be 0 anyway.
   - A design has to drive them low. Left unconnected, a CIB input reads 1, and the ADC then
     converts at mid-scale (seen on a Versa board; driving both low gives Radiant's readings).
-  - `LFCPNX/adc_tied_inputs.json` in the database records this.
+  - `LFCPNX/tied_inputs.json` in the database records this.
 - No other ADC_CORE fabric input is tied by Radiant. The others (ADCEN, CAL, CHAEN, CHASEL0-3,
   CHBEN, CHBSEL0-3, CLKFAB, CONVSTOP, RESETN, RSTN, SOC) are primitive ports. The remaining
   ADC_CORE inputs are analog or dedicated (GPIOP / N, DP / DN, COMP*IP / IN, CLKDCLK).
