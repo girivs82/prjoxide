@@ -11,6 +11,8 @@
 #
 # Usage: gen_dqsbuf_ivref.py <basename>   (writes <basename>.v and <basename>.pdc)
 #   GROUPS="[(dqs pad, [dq pads], use_ivref), ...]" overrides the groups (single-bank probes).
+#   FABCLK=clk|dcc|lut|eclk also uses DQSR90 / DQSW / DQSW270 in fabric (a register clock, a DCC, a
+#   LUT input, an ECLKSYNC); map refuses all of them (see fuzzers/LFCPNX/037-ivref/README.md).
 import random
 import sys
 
@@ -69,6 +71,25 @@ for g, grp in enumerate(GROUPS):
         conns.append(".{}({})".format(name, sreg(max(n, 1))))
     conns += [".DQSR90({}r90)".format(w), ".DQSW({}w)".format(w), ".DQSW270({}w270)".format(w),
               ".RDPNTR({}rdp)".format(w), ".WRPNTR({}wrp)".format(w)]
+    if os.environ.get("FABCLK"):
+        # also use the DQS clocks in fabric, so they leave through the CIB (SR90CIB / SW270CIB /
+        # DQSWCIB): as the clock of a register (FABCLK=clk), or through a DCC (FABCLK=dcc)
+        for ck in ("r90", "w", "w270"):
+            ckn = "{}{}".format(w, ck)
+            mode = os.environ["FABCLK"]
+            if mode == "lut":
+                # a LUT input: the clock XORed with a register, captured
+                body.append("    reg {0}_q; always @(posedge sclk) {0}_q <= {1} ^ {2};".format(w + ck, ckn, sreg(1)))
+                cap.append("{}_q".format(w + ck))
+                continue
+            if mode == "eclk":
+                body.append("    wire {0}_e; ECLKSYNC #(.STOP_EN(\"DISABLE\")) u_{0}_es (.ECLKIN({0}), .STOP(1'b0), .ECLKOUT({0}_e));".format(ckn))
+                ckn = ckn + "_e"
+            if mode == "dcc":
+                body.append("    wire {0}_g; DCC u_{0}_dcc (.CLKI({0}), .CE(1'b1), .CLKO({0}_g));".format(ckn))
+                ckn = ckn + "_g"
+            body.append("    reg {0}_q; always @(posedge {1}) {0}_q <= {2};".format(w + ck, ckn, sreg(1)))
+            cap.append("{}_q".format(w + ck))
     for name, n in OUT_PINS:
         o = "{}{}".format(w, name.lower())
         body.append("    wire {};".format(o))

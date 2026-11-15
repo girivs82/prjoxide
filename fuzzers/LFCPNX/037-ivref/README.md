@@ -86,8 +86,15 @@ and the same on all 5 PHY designs (5 arcs each):
 | WRCOUT | `N1E6:JQ7_CIBTEST` |
 | WRLVCOUT | `N1W1:JQ7_CIBTEST` |
 
-These replace LIFCL's JQ6 / JQ7 targets. The DQS-clock outputs to the fabric (SR90CIB, SW270CIB,
-DQSWCIB) keep LIFCL's connections: no design drives fabric from them, so they are unchecked.
+These replace LIFCL's JQ6 / JQ7 targets.
+
+The DQS-clock CIB outputs (SR90CIB, SW270CIB, DQSWCIB) keep LIFCL's connections, unchecked: Radiant
+does not route DQSR90, DQSW or DQSW270 to the fabric at all. Map refuses them as slice data (M0), LUT
+input (A0), slice clock, DCC and ECLKSYNC input ("cannot drive ... due to physical device
+connectivity restrictions"), and its rule lists one legal sink for each: "The DQSR90 port of
+DQSBUFA_CORE can either drive the DQSR90 port of IOLOGIC_CORE", and the same for DQSW and DQSW270.
+So these three connections are not usable from the fabric in Radiant designs. The probes are
+`gen_dqsbuf_ivref.py` with FABCLK=clk / dcc / lut / eclk.
 RDPNTR / WRPNTR have no fabric connections; they reach the IDDRX4DQ through dedicated paths.
 
 ## Not resolved here
