@@ -19,7 +19,12 @@ Two kinds of results come out of this work; keep them apart when reviewing.
 | `032-hsio_mode` | PIO enums for the HP-bank SYSIO tile types (B3/B4/B5, incl. DQS/V18/ECLK variants). On LFCPNX the primitives are `SEIO18A_CORE`/`DIFFIO18A_CORE`. |
 | `036-hsio-vref` | LVSTL_I/II and LVSTLD_I/II on the HP banks (BASE_TYPE, DRIVE_LVSTL, TERMINATION_1V1, VREF_LVSTL), the referenced-standard slew rate (SLEWRATE_REF), and the LVSTL bank / chip bits (BANKREF, DOSCL_P18). Its README also documents the LFCPNX decode choices below. |
 | `037-ivref` | The LVSTL internal input reference: `BANK<n>.IVREF` and the IVREF_CORE `IVREFI[6:0]` connections (DQSBUF_IVREF), from Radiant-built designs; see its README. |
+| `040-speed` | `CHIP.SPEED` (PMU F11B0, High-Performance vs Low-Power), as LIFCL. |
 | `060-ebr-config`, `080-dsp-config` | EBR, MIB_EBR and DSP configuration bits. |
+| `090-sysconfig` | SYSCONFIG port enums (ldc_set_sysconfig). JTAG_PORT is a PMU bit that is on by default; its DISABLE option locks JTAG out (see its README). |
+| `091-osc` | The internal oscillator (OSC_CORE, new tile type EFB_1_OSC), bit for bit as LIFCL. Its fabric connections come from Radiant-routed designs (`timing/fuzzers/LFCPNX/17-osc-pins`). |
+| `131-config-ip` | MULTIBOOT (CONFIG_MULTIBOOT_CORE), through the synthesized flow; which configuration cores exist and can be reached on LFCPNX-100. |
+| `154-ddrll` | The two DDRDLLs, and the left one's clock input (DOSCL_P18 mux, DDR40_ECLK_L feed). |
 | `122-pll-config` | GPLL_{ULC,URC,LLC,LRC} enums (CLKMUX_FB, LMMICLK/LMMIRESETN inversion). LLC/LRC/ULC match LIFCL bit for bit; no MODE bit appears in the GPLL tiles on LFCPNX. |
 
 The IO templates drive `PADDO` from a `VHI` because Radiant 2026.1 bitgen
