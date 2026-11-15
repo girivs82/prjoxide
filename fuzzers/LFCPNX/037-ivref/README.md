@@ -97,7 +97,8 @@ So these three connections are not usable from the fabric in Radiant designs. Th
 `gen_dqsbuf_ivref.py` with FABCLK=clk / dcc / lut / eclk.
 RDPNTR / WRPNTR have no fabric connections; they reach the IDDRX4DQ through dedicated paths.
 
-## Not resolved here
+## Resolved later
 
-- Bank 5, in a bank-5-only design: DOSCL_P18 F9B0 / F11B0 and DDR40_ECLK_L F102B1. These are
-  probably the left DDRDLL / edge-clock path.
+- Bank 5, in a bank-5-only design: DOSCL_P18 F9B0 / F11B0 and DDR40_ECLK_L F102B1. These are the
+  clock input of the left DDRDLL: its CLKIN mux on edge clock 1, and that edge clock's feed to it.
+  See `154-ddrll/README.md`.

@@ -132,5 +132,7 @@ places as in the other groups' five tiles (153-dqsbuf, group DQSB4M).
 F62B0 (first tile) / F63B0 (second tile) of every DQS-group IOLOGIC whose output is clocked by
 DQSW or DQSW270 is `IOLOGIC<x>.MODDRXN.DQSW_CLK`, from the same PHY designs; see
 `156-dqsw-iologic/README.md`. With it, and with the static bits of 170-mpcs-serdes recorded as
-always_on, these PHY designs decode with no unknown bits.
+always_on, these PHY designs decode with no unknown bits. When Radiant places the DDRDLL on the left,
+its clock input is decoded too: the DOSCL_P18 CLKIN mux and the DDR40_ECLK_L edge-clock feed
+(`154-ddrll/README.md`).
 

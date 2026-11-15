@@ -65,6 +65,6 @@ no other pad. It is written to all bank 4 / 5 tile types:
 
 The X2 design decodes with no unknown bits at all. Its MODDRX2_* / MIDDRX2 / IDDRX2 options come
 from 070's structural builds, and DQSW_CLK is set as in X4. With the database written, the bank 4 / 5
-designs have no unknown bits in any SYSIO tile. With the DDRDLL on the left, three bits outside the
-SYSIO tiles remain: DOSCL_P18 F9B0 / F11B0 and DDR40_ECLK_L F102B1. They are absent with the
-DDRDLL on the right.
+designs have no unknown bits in any SYSIO tile. With the DDRDLL on the left, three more bits were
+set outside the SYSIO tiles: DOSCL_P18 F9B0 / F11B0 and DDR40_ECLK_L F102B1. They are the left
+DDRDLL's clock input (`154-ddrll/README.md`). With those written, these designs have no unknown bits.
