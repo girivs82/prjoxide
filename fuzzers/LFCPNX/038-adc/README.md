@@ -17,6 +17,11 @@ CIB_R68C159:ADC. No IP licence is needed (a base primitive, like the PLL).
   `ENADC_IN=ENABLED` (032's `PIO<x>.SEIO18.ENADC_IN`). The channel is chosen at runtime by the
   fabric ports CHASEL[3:0] / CHBSEL[3:0], so the code-to-pad map is not in the bitstream.
 
+From Lattice's ADC user guide (FPGA-TN-02129), as passed on from the LPDDR4 work and not checked
+here: ADC1 channel codes 0-7 select CP8-15 / CN8-15 (e.g. CP14 / CN14 = ADC1 code 6); the
+conversion clock is the LRC PLL's CLKOS4 divided by CLK_DIV, at most 25 MHz; the fabric clock
+(CLKFAB) at most 40 MHz.
+
 ## Configuration (fuzzer.py; enums and a word in tile type ADC)
 
 One parameter at a time against the instance with all parameters unset. Legal values are from
