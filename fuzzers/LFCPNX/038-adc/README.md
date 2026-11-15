@@ -50,7 +50,7 @@ The method is `tools/radiant-fuzz/infer_adc_conns.py`, as for the LRAM / DQSBUF 
 Radiant-routed designs drive every input from its own register and capture every output. A pin
 is written only when one wire is left and all of at least 10 arcs agree.
 
-- **All 50 pins connected.** The 48 traced fabric pins, plus CHBSEL3 and CLKFAB, are written to
+- **All 52 fabric pins connected.** The 48 traced fabric pins, plus CHBSEL3, CLKFAB, RSVDH and RSVDL, are written to
   the ADC tile type as `W1:J<pin>_ADC_CORE_ADC0` (LIFCL's naming).
   - Inputs come from CIBMUXOUT / CE wires next to the block; e.g. CHASEL0-3 <- S1W1:JCIBMUXOUTA0-3,
     CHBSEL0-3 <- S1W1:JCIBMUXOUTA4-7.
@@ -68,7 +68,20 @@ is written only when one wire is left and all of at least 10 arcs agree.
   oscillator and a PLL_LRC output; only the branch feeding JCLK0 differs.
 - 47 agree with LIFCL. The 3 that do not are COMP1O / COMP2O / COMP3O: S2W1:JF0/1/2_CIBTEST here,
   N2W1:JQ0/1/2 in LIFCL.
-- RSVDH / RSVDL are tied off by the primitive.
+- **RSVDH / RSVDL** are fabric inputs that LSE's ADC primitive does not expose. Radiant ties both
+  to **0**: GND_net in the backannotated netlist, one constant LUT output, in all 24 designs. They
+  enter on R69C158 JCIBMUXOUTC0 / C1: `W1:JRSVDH_ADC_CORE_ADC0 <- S1W1:JCIBMUXOUTC0`, `W1:JRSVDL_...
+  <- S1W1:JCIBMUXOUTC1`.
+  - `tools/radiant-fuzz/check_adc_rsvd.py`: in every design both wires carry that one net and no
+    other ADC input.
+  - Which wire is H and which L cannot be told apart in Radiant's designs (same net). The
+    assignment follows LIFCL; both must be 0 anyway.
+  - A design has to drive them low. Left unconnected, a CIB input reads 1, and the ADC then
+    converts at mid-scale (seen on a Versa board; driving both low gives Radiant's readings).
+  - `LFCPNX/adc_tied_inputs.json` in the database records this.
+- No other ADC_CORE fabric input is tied by Radiant. The others (ADCEN, CAL, CHAEN, CHASEL0-3,
+  CHBEN, CHBSEL0-3, CLKFAB, CONVSTOP, RESETN, RSTN, SOC) are primitive ports. The remaining
+  ADC_CORE inputs are analog or dedicated (GPIOP / N, DP / DN, COMP*IP / IN, CLKDCLK).
 
 ## Analog inputs on the Versa board
 
