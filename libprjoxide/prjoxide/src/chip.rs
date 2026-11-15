@@ -243,6 +243,20 @@ impl Chip {
         }
     }
     // Get a tile by name
+    /// Decode every tile and write its FASM, with the family's decoder post-passes (LFCPNX only).
+    pub fn write_fasm_tiles(&self, db: &mut Database, out: &mut dyn Write) {
+        if self.family == "LFCPNX" {
+            let mut decs: Vec<TileDecode> = self.tiles.iter().map(|t| t.decode_fasm(db)).collect();
+            crate::lfcpnx_decode::postprocess(self, db, &mut decs);
+            for (t, d) in self.tiles.iter().zip(decs.iter()) {
+                t.write_decoded(d, out);
+            }
+        } else {
+            for t in self.tiles.iter() {
+                t.write_fasm(db, out);
+            }
+        }
+    }
     pub fn tile_by_name(&self, name: &str) -> Result<&Tile, &'static str> {
         match self.tiles_by_name.get(name) {
             None => {
@@ -590,6 +604,23 @@ Please make sure Oxide and nextpnr are up to date. If they are, consider reporti
     }
 }
 
+/// One decoded FASM feature of a tile (text without the tile prefix) and the bits it explains.
+#[derive(Clone, Debug)]
+pub struct DecodedFeature {
+    pub text: String,
+    /// (enum, option) for enum features
+    pub enum_name: Option<(String, String)>,
+    pub bits: BTreeSet<(usize, usize)>,
+}
+
+/// A tile's decoded features, before they are written out.
+#[derive(Clone, Debug)]
+pub struct TileDecode {
+    pub features: Vec<DecodedFeature>,
+    /// always-on bits found set
+    pub always_on: BTreeSet<(usize, usize)>,
+}
+
 // Actual instance of a tile
 #[derive(Clone)]
 pub struct Tile {
@@ -695,11 +726,10 @@ Please make sure Oxide and nextpnr are up to date. If they are, consider reporti
             self.cram.set(*f, *b, true);
         }
     }
-    pub fn write_fasm(&self, db: &mut Database, mut out: &mut dyn Write) {
+    /// Decode this tile's configuration into FASM features, each with the bits it explains.
+    pub fn decode_fasm(&self, db: &mut Database) -> TileDecode {
         let tdb = db.tile_bitdb(&self.family, &self.tiletype);
-        let fasm_name = self.name.replace(':', "__");
-        let mut known_bits = BTreeSet::<(usize, usize)>::new();
-        let mut total_matches = 0;
+        let mut features = Vec::new();
         for (to_wire, pips) in tdb.db.pips.iter() {
             let best_match = pips
                 .iter()
@@ -711,34 +741,24 @@ Please make sure Oxide and nextpnr are up to date. If they are, consider reporti
                 })
                 .max_by_key(|p| p.bits.len());
             if let Some(m) = best_match {
-                writeln!(
-                    &mut out,
-                    "{}.PIP.{}.{}",
-                    fasm_name,
-                    to_wire.replace(':', "__"),
-                    m.from_wire.replace(':', "__")
-                )
-                .unwrap();
-                let mut matched_bits = m.bits.iter().map(|cb| (cb.frame, cb.bit)).collect();
-                known_bits.append(&mut matched_bits);
-                total_matches += 1;
+                features.push(DecodedFeature {
+                    text: format!(
+                        "PIP.{}.{}",
+                        to_wire.replace(':', "__"),
+                        m.from_wire.replace(':', "__")
+                    ),
+                    enum_name: None,
+                    bits: m.bits.iter().map(|cb| (cb.frame, cb.bit)).collect(),
+                });
             }
         }
         for (name, edata) in tdb.db.enums.iter() {
-            let best_match = edata
-                .options
-                .iter()
-                .filter(|(_k, v)| {
-                    v.iter().any(|cb| !cb.invert)
-                        && v.iter()
-                            .all(|cb| self.cram.get(cb.frame, cb.bit) == !cb.invert)
-                })
-                .max_by_key(|(_k, v)| v.len());
-            if let Some((opt, bits)) = best_match {
-                writeln!(&mut out, "{}.{}.{}", fasm_name, name, opt).unwrap();
-                let mut matched_bits = bits.iter().map(|cb| (cb.frame, cb.bit)).collect();
-                known_bits.append(&mut matched_bits);
-                total_matches += 1;
+            if let Some((opt, bits)) = self.best_enum_match(edata) {
+                features.push(DecodedFeature {
+                    text: format!("{}.{}", name, opt),
+                    enum_name: Some((name.to_string(), opt.to_string())),
+                    bits: bits.iter().map(|cb| (cb.frame, cb.bit)).collect(),
+                });
             }
         }
         for (name, wdata) in tdb.db.words.iter() {
@@ -765,31 +785,72 @@ Please make sure Oxide and nextpnr are up to date. If they are, consider reporti
                     }
                 })
                 .collect();
-            writeln!(
-                &mut out,
-                "{}.{}[{}:0] = {}'b{}",
-                fasm_name,
-                name,
-                wdata.bits.len() - 1,
-                wdata.bits.len(),
-                bitstr
-            )
-            .unwrap();
-            let mut matched_bits = wdata
-                .bits
-                .iter()
-                .flatten()
-                .map(|cb| (cb.frame, cb.bit))
-                .collect();
-            known_bits.append(&mut matched_bits);
-            total_matches += 1;
+            features.push(DecodedFeature {
+                text: format!(
+                    "{}[{}:0] = {}'b{}",
+                    name,
+                    wdata.bits.len() - 1,
+                    wdata.bits.len(),
+                    bitstr
+                ),
+                enum_name: None,
+                bits: wdata
+                    .bits
+                    .iter()
+                    .flatten()
+                    .map(|cb| (cb.frame, cb.bit))
+                    .collect(),
+            });
         }
+        let mut always_on = BTreeSet::new();
         for aon in tdb.db.always_on.iter() {
             if self.cram.get(aon.frame, aon.bit) {
-                known_bits.insert((aon.frame, aon.bit));
+                always_on.insert((aon.frame, aon.bit));
             } else {
-                warn!("Supposedly always on bit F{}B{} in {} found to be cleared!\n", aon.frame, aon.bit, fasm_name);
+                warn!(
+                    "Supposedly always on bit F{}B{} in {} found to be cleared!\n",
+                    aon.frame,
+                    aon.bit,
+                    self.name.replace(':', "__")
+                );
             }
+        }
+        TileDecode {
+            features,
+            always_on,
+        }
+    }
+
+    /// The option of an enum that the decoder picks: of the options whose bits all match (and
+    /// that set at least one bit), the one with the most bits; among equal ones, the last by name.
+    pub fn best_enum_match<'a>(
+        &self,
+        edata: &'a ConfigEnumData,
+    ) -> Option<(&'a String, &'a BTreeSet<ConfigBit>)> {
+        edata
+            .options
+            .iter()
+            .filter(|(_k, v)| self.option_matches(v))
+            .max_by_key(|(_k, v)| v.len())
+    }
+
+    /// Whether every bit of an enum option matches this tile's CRAM (and it sets at least one).
+    pub fn option_matches(&self, bits: &BTreeSet<ConfigBit>) -> bool {
+        bits.iter().any(|cb| !cb.invert)
+            && bits
+                .iter()
+                .all(|cb| self.cram.get(cb.frame, cb.bit) == !cb.invert)
+    }
+
+    /// Write decoded features, then every set bit none of them explains as UNKNOWN.
+    pub fn write_decoded(&self, dec: &TileDecode, mut out: &mut dyn Write) {
+        let fasm_name = self.name.replace(':', "__");
+        let mut known_bits = dec.always_on.clone();
+        let mut total_matches = 0;
+        for f in dec.features.iter() {
+            writeln!(&mut out, "{}.{}", fasm_name, f.text).unwrap();
+            known_bits.extend(f.bits.iter().cloned());
+            total_matches += 1;
         }
         for f in 0..self.cram.frames {
             for b in 0..self.cram.bits {
@@ -802,5 +863,10 @@ Please make sure Oxide and nextpnr are up to date. If they are, consider reporti
         if total_matches > 0 {
             writeln!(&mut out, "").unwrap();
         }
+    }
+
+    pub fn write_fasm(&self, db: &mut Database, out: &mut dyn Write) {
+        let dec = self.decode_fasm(db);
+        self.write_decoded(&dec, out);
     }
 }

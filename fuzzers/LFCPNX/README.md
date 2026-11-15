@@ -17,6 +17,7 @@ Two kinds of results come out of this work; keep them apart when reviewing.
 |---|---|
 | `031-io_mode` | PIO enums for every SEIO33 SYSIO tile type (B0/B1/B2/B6/B7 EVEN/ODD, B1_DED, B1/B2/B6/B7 `_0_C` and `_0_REM`). Radiant 2026.1 rejects `INPUT_LVCMOS10` on SEIO33, so it is absent. |
 | `032-hsio_mode` | PIO enums for the HP-bank SYSIO tile types (B3/B4/B5, incl. DQS/V18/ECLK variants). On LFCPNX the primitives are `SEIO18A_CORE`/`DIFFIO18A_CORE`. |
+| `036-hsio-vref` | LVSTL_I/II and LVSTLD_I/II on the HP banks (BASE_TYPE, DRIVE_LVSTL, TERMINATION_1V1), the referenced-standard slew rate (SLEWRATE_REF), and the LVSTL bank / chip bits (BANKREF, DOSCL_P18). Its README also documents the LFCPNX decode choices below. |
 | `060-ebr-config`, `080-dsp-config` | EBR, MIB_EBR and DSP configuration bits. |
 | `122-pll-config` | GPLL_{ULC,URC,LLC,LRC} enums (CLKMUX_FB, LMMICLK/LMMIRESETN inversion). LLC/LRC/ULC match LIFCL bit for bit; no MODE bit appears in the GPLL tiles on LFCPNX. |
 
@@ -86,3 +87,37 @@ and TAP settings cannot be fuzzed from readback images.
 
 Nothing Radiant-generated (bitstreams, udb, IP generator output, logs) is
 committed; only the derived database.
+
+## HP-IO decode post-passes (LFCPNX only)
+
+`libprjoxide/prjoxide/src/lfcpnx_decode.rs` runs after the per-tile decode of LFCPNX bitstreams. It
+does two things, described in `036-hsio-vref/README.md`:
+
+- Second-tile PIOA enums take the first tile's decode of PIOA, or NONE when PIOA is unused.
+- Of the DRIVE_*, TERMINATION_* and SLEWRATE / SLEWRATE_REF variants, only those for the PIO's IO
+  type are kept.
+
+A feature is only relabelled to another matching option, or dropped when the remaining features
+explain all of its set bits, so decoding and then packing gives the same bitstream. Options with
+identical bits are listed in each enum's database description; the decoder emits the last one by
+name. LIFCL and LFD2NX decoding is unchanged.
+
+## DQSBUF bits from Radiant-built PHY designs (bank 3)
+
+Two bits that 153-dqsbuf's structural builds cannot set came from a Radiant-built LPDDR4-style
+byte-lane PHY (DQSBUF, DDRDLL, ODDRX4DQ / IDDRX4DQ / TSHX4DQ, DELAYA). It was built once per DQSBUF
+input: all fabric inputs tied to 0, then each one driven from a register in turn, plus DLLCODE tied
+to 0.
+
+- `DQSBUF.DLLCODE` (SYSIO_B3_0_DQS1 F45B1): set when DLLCODE is driven by the DDRDLL.
+- `DQSBUF.DQSI` (SYSIO_B3_0_DQS3 F52B1): set in every such design. DQSI can only come from the
+  group's DQS pad (Radiant refuses a fabric source), so this bit is not separable from that
+  connection.
+
+None of the other inputs (RDCLKSEL, RDDIR, RDLOADN, READ, READMOVE, SELCLK, WRDIR, WRLOAD_N, WRLVDIR,
+WRLVLOAD_N, WRLVMOVE, WRMOVE) has a bit of its own. Banks 4 and 5 have not been built this way.
+
+Still undecoded in those PHY designs: F62B0 (first tile) / F63B0 (second tile) of every DQS-group
+IOLOGIC whose output is clocked by DQSW or DQSW270. 070-iologic_mode's builds have no DQSBUF
+connected, so they never set it.
+
