@@ -66,7 +66,7 @@ differential first) are kept:
 | LVCMOS12H | 1V2 | 1V2 | SLEWRATE |
 | LVCMOS10H | 1V0 | 1V0 | SLEWRATE |
 | SSTL15_I/II, HSTL15_I (and D) | 1V5 | 1V5 | SLEWRATE_REF |
-| SSTL135_I/II (and D) | none | 1V35 | SLEWRATE_REF |
+| SSTL135_I/II (and D) | 1V35 (SSTL135_II only) | 1V35 | SLEWRATE_REF |
 | HSUL12 (and D) | HSUL12 | 1V2 | SLEWRATE_REF |
 | LVSTL_I, LVSTL_II (and D) | LVSTL | 1V1 | SLEWRATE_REF |
 
@@ -79,10 +79,39 @@ bits of OUTPUT_LVSTL_I with DRIVE_LVSTL 12, so such an output decodes as OUTPUT_
 type; `describe.py` writes each enum's groups into its database description, as
 `canonical = equivalent = ...`.
 
+## SSTL15_II / SSTL135_II drive
+
+Radiant accepts one DRIVE for SSTL15_II and SSTL135_II outputs: 10. For any other value map says
+"change DRIVE to 10". Its synthesized flow sets it by default. The structural builds of this
+fuzzer and 032 set BASE_TYPE OUTPUT_SSTL15_II with the drive code left at 0, so in Radiant-built
+designs the code was unknown:
+- PIOA: F12B1 + F13B1;
+- PIOB: F90B0.
+
+`gen_class2.py` builds one output of the IO type on a pad of every one of the 33 bank 3 / 4 / 5 SYSIO
+tile types (PB<n>A for the first-tile types, PB<n>B for the second-tile ones). For SSTL15_II and
+SSTL135_II alike, every tile type gives the same code:
+
+| PIO | drive code bits | DRIVE=10 |
+|---|---|---|
+| PIOA (first tile) | F9B1-F13B1 | F12B1, F13B1 set; F9B1-F11B1 clear |
+| PIOB (second tile) | F89B0-F93B0 | F89B0, F90B0 set; F91B0-F93B0 clear |
+
+F89B0 is also set when PIOB is unused, so only F90B0 showed as unknown. Both being set was read by
+decoding with each candidate option. It matches PIOA by the correspondence of the existing 2 / 4 / 8
+options (F13B1 - F89B0, F12B1 - F90B0, F10B1 - F92B0, F9B1 / F11B1 - F91B0 / F93B0).
+
+`write_class2_drive.py` adds option `10` to DRIVE_1V5, and a DRIVE_1V35 enum with the same option,
+on all 33 tile types. An SSTL135_II output decodes as SSTL15_II (identical bits; see the canonical
+options above), so its drive decodes as DRIVE_1V5 10. DRIVE_1V35 is there for writing FASM for
+SSTL135_II. SSTL15_I / SSTL135_I have no DRIVE; their code is part of their BASE_TYPE.
+
 ## Run
 
     fuzzer.py            # bank, the 44 pads (about 1300 Radiant builds), then VREF_LVSTL (44)
     describe.py          # descriptions (bits untouched)
+    gen_class2.py <pin list> SSTL15_II <name>   # class-II output design, built with radiant.sh
+    write_class2_drive.py                       # DRIVE_1V5 / DRIVE_1V35 10
 
 `probe.py` to `probe6.py` are the exploratory builds the above is based
 on (one pad pair, value discovery, bank-level tiles, VREF on LVSTL_I / HSUL12 / SSTL15_I).
