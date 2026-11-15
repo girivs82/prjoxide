@@ -42,7 +42,7 @@ existing one, so FASM that packed before packs to the same bitstream.
 ## Decode choices (lfcpnx_decode.rs, LFCPNX only)
 
 The tile decoder picks, per enum, the longest option whose bits all match. On these tiles that
-alone gives misleading output, so two post-passes run on LFCPNX decodes. Neither changes which bits
+alone gives misleading output, so three post-passes run on LFCPNX decodes. Neither changes which bits
 are explained (a feature is only relabelled to another matching option, or dropped when the
 remaining features explain all of its set bits), so packing the decoded FASM gives the same
 bitstream.
@@ -78,6 +78,17 @@ bits of OUTPUT_LVSTL_I with DRIVE_LVSTL 12, so such an output decodes as OUTPUT_
 `BANK<n>.LVSTL` tells the two classes apart. The groups differ by tile
 type; `describe.py` writes each enum's groups into its database description, as
 `canonical = equivalent = ...`.
+
+(c) **Single-ended LVSTL with the internal reference.** An LVSTL_I / LVSTL_II pad with
+`VREF=VREF_INT` sets SEIO18 BASE_TYPE `*_LVSTL_*` and `VREF_LVSTL.VREF_INT`. Together these cover
+every set bit of DIFFIO18 BASE_TYPE `*_LVSTLD_*` (the differential option's F13B1 is a clear bit),
+so the pad also decoded as LVSTLD_I. A differential LVSTL pair never sets VREF_INT. So when PIOA
+decodes `VREF_LVSTL.VREF_INT` with a single-ended LVSTL BASE_TYPE, the DIFFIO18 `*_LVSTLD_*` line
+is dropped if the remaining features explain its bits.
+- Effect, e.g. on 037-ivref's DQSBUF_IVREF designs: the single-ended DQ pads lose the extra LVSTLD_I
+  line.
+- The differential DQS pads keep theirs.
+- The FASM packs to the same bitstream.
 
 ## SSTL15_II / SSTL135_II drive
 

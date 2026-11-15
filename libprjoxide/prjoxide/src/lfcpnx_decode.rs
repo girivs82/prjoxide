@@ -20,6 +20,13 @@
 //!     (e.g. BIDIR_HSUL12, BIDIR_HSTL15_I, BIDIR_LVCMOS15H and BIDIR_LVCMOS18H in the PIOB BASE_TYPE)
 //!     cannot be told apart from the bitstream; the decoder emits the canonical one, the last by name,
 //!     and the database description of each such enum lists the equivalents.
+//!
+//! (c) Single-ended LVSTL with the internal reference. An LVSTL_I / LVSTL_II pad with
+//!     VREF=VREF_INT sets SEIO18 BASE_TYPE *_LVSTL_* plus VREF_LVSTL.VREF_INT, and together those
+//!     cover every set bit of DIFFIO18 BASE_TYPE *_LVSTLD_*, so the differential type decodes as
+//!     well. A differential LVSTL pair never sets VREF_INT, so when VREF_INT is decoded the
+//!     DIFFIO18 option is dropped (when the remaining features explain its bits): the pad is the
+//!     single-ended type with the internal reference.
 
 use crate::chip::{Chip, DecodedFeature, Tile, TileDecode};
 use crate::database::Database;
@@ -190,6 +197,30 @@ fn voltage_select(tile: &Tile, dec: &mut TileDecode, pio: &str, std: Option<Stri
     drop_explained(tile, dec, &drop);
 }
 
+/// (c): a single-ended LVSTL pad with VREF_INT also matches the differential LVSTLD type; drop the
+/// DIFFIO18 option in that case.
+fn lvstl_single_ended(tile: &Tile, dec: &mut TileDecode, pio: &str) {
+    if find(dec, &format!("{}.SEIO18.VREF_LVSTL", pio)) != Some("VREF_INT") {
+        return;
+    }
+    match find(dec, &format!("{}.SEIO18.BASE_TYPE", pio)).and_then(option_std) {
+        Some("LVSTL_I") | Some("LVSTL_II") => {}
+        _ => return,
+    }
+    let diff = format!("{}.DIFFIO18.BASE_TYPE", pio);
+    let drop: BTreeSet<usize> = dec
+        .features
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| match &f.enum_name {
+            Some((e, o)) => *e == diff && option_std(o).map_or(false, |s| s.starts_with("LVSTLD_")),
+            None => false,
+        })
+        .map(|(i, _)| i)
+        .collect();
+    drop_explained(tile, dec, &drop);
+}
+
 /// The IO standard a PIO is configured for, from its BASE_TYPE decodes (differential first).
 fn pio_std(dec: &TileDecode, pio: &str) -> Option<String> {
     for kind in ["DIFFIO18", "SEIO18"] {
@@ -226,6 +257,7 @@ pub fn postprocess(chip: &Chip, db: &mut Database, decs: &mut [TileDecode]) {
             (&mut b[0], &mut a[i])
         };
         let t0 = &chip.tiles[j];
+        lvstl_single_ended(t0, d0, "PIOA");
         let std_a = pio_std(d0, "PIOA");
         voltage_select(t0, d0, "PIOA", std_a);
         pair_context(d0, t1, d1, db);
