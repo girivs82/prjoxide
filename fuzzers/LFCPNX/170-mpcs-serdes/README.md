@@ -24,8 +24,12 @@ bitstreams, no licence feature needed). Nothing Radiant-generated is committed; 
   (per quad) `QUAD_USED` (F1B0+F4B0), `PWDN_N` (F27B0 when DISABLED), `IDDQ_PCS` (F21B0),
   `PHY_MODE` (SATAMODE: F25B0), `PIPE_LN2LK` (F5/F6/F7/F9/F14/F15/F19) and the word `BOND_MODE`
   (TX_BOND_MODE = RX_BOND_MODE, bit k sets F(38+k) and F(43+k)).
-- The 9 static bits Radiant sets in every design (SERDES_REFCLK F0/F1/F2/F3/F10 B0, DOSCL_P18
-  F6B1/F11B1, PCS_1/PCS_5 F0B0) are left undecoded: designs without them work on silicon.
+- The 9 static bits Radiant sets in every design, including empty ones and every MPCS build
+  (SERDES_REFCLK F0/F1/F2/F3/F10 B0, DOSCL_P18 F6B1/F11B1, PCS_1/PCS_5 F0B0), are the
+  `always_on` bits of those tile types (`write_static.py`, which also creates SERDES_REFCLK.ron).
+  So the packer sets them in every bitstream, as Radiant does, and decodes show them as known.
+  No Radiant setting changes them. Their function is unknown, probably defaults for the unused
+  SERDES / PCS blocks. They are not needed on silicon: designs without them work.
 
 Radiant writes the lane registers one byte at a time, omitting bytes that are at their default, in
 descending order of (address bits 8-15, address); prjoxide's packer does the same (it writes the whole

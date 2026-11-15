@@ -119,6 +119,6 @@ WRLVLOAD_N, WRLVMOVE, WRMOVE) has a bit of its own. Banks 4 and 5 have not been 
 
 F62B0 (first tile) / F63B0 (second tile) of every DQS-group IOLOGIC whose output is clocked by
 DQSW or DQSW270 is `IOLOGIC<x>.MODDRXN.DQSW_CLK`, from the same PHY designs; see
-`156-dqsw-iologic/README.md`. With it, these PHY designs decode with no unknown bits beyond the
-static ones listed for 170-mpcs-serdes.
+`156-dqsw-iologic/README.md`. With it, and with the static bits of 170-mpcs-serdes recorded as
+always_on, these PHY designs decode with no unknown bits.
 
