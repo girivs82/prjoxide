@@ -27,6 +27,15 @@
 //!     well. A differential LVSTL pair never sets VREF_INT, so when VREF_INT is decoded the
 //!     DIFFIO18 option is dropped (when the remaining features explain its bits): the pad is the
 //!     single-ended type with the internal reference.
+//!
+//! (d) BASE_TYPE with a non-default drive. A BASE_TYPE option was fuzzed at the IO type's default
+//!     drive, so it includes the default code in the PIO's drive bits. At another drive (e.g.
+//!     LVCMOS10H / LVCMOS12H at 2 or 4 mA) the code differs, the option no longer matches, and the
+//!     pad decoded as some other type with bits left over. When the tile has unexplained bits, a
+//!     BASE_TYPE option is accepted if all its bits outside the drive code match and a DRIVE option
+//!     of its IO type's class matches the code exactly; packing the two gives the same bits, as the
+//!     packer applies BASE_TYPE before the other enums. It is only taken when it leaves fewer
+//!     unexplained bits and none that were explained before.
 
 use crate::chip::{Chip, DecodedFeature, Tile, TileDecode};
 use crate::database::Database;
@@ -221,6 +230,148 @@ fn lvstl_single_ended(tile: &Tile, dec: &mut TileDecode, pio: &str) {
     drop_explained(tile, dec, &drop);
 }
 
+/// Set bits of the tile that no feature (nor an always-on bit) explains.
+fn unexplained(
+    tile: &Tile,
+    features: &[DecodedFeature],
+    always_on: &BTreeSet<(usize, usize)>,
+) -> BTreeSet<(usize, usize)> {
+    let known: BTreeSet<(usize, usize)> = features
+        .iter()
+        .flat_map(|f| f.bits.iter().cloned())
+        .chain(always_on.iter().cloned())
+        .collect();
+    let mut out = BTreeSet::new();
+    for f in 0..tile.cram.frames {
+        for b in 0..tile.cram.bits {
+            if tile.cram.get(f, b) && !known.contains(&(f, b)) {
+                out.insert((f, b));
+            }
+        }
+    }
+    out
+}
+
+/// (d): a BASE_TYPE at a non-default drive: the option whose bits outside the drive code match,
+/// with the DRIVE option of its class that matches the code.
+fn base_type_with_drive(tile: &Tile, dec: &mut TileDecode, db: &mut Database, pio: &str) {
+    let before = unexplained(tile, &dec.features, &dec.always_on);
+    if before.is_empty() {
+        return;
+    }
+    let base_name = format!("{}.SEIO18.BASE_TYPE", pio);
+    let drive_prefix = format!("{}.SEIO18.DRIVE_", pio);
+    let tdb = db.tile_bitdb(&tile.family, &tile.tiletype);
+    let base = match tdb.db.enums.get(&base_name) {
+        Some(e) => e.clone(),
+        None => return,
+    };
+    let drives: Vec<(String, crate::database::ConfigEnumData)> = tdb
+        .db
+        .enums
+        .iter()
+        .filter(|(n, _)| n.starts_with(&drive_prefix))
+        .map(|(n, e)| (n.clone(), e.clone()))
+        .collect();
+    // the drive code: every bit of the PIO's DRIVE_* enums
+    let code: BTreeSet<(usize, usize)> = drives
+        .iter()
+        .flat_map(|(_, e)| e.options.values().flatten().map(|cb| (cb.frame, cb.bit)))
+        .collect();
+    if code.is_empty() {
+        return;
+    }
+    // the features that stay: all but this PIO's BASE_TYPE and DRIVE_* lines
+    let is_replaced = |f: &DecodedFeature| match &f.enum_name {
+        Some((e, _)) => *e == base_name || e.starts_with(&drive_prefix),
+        None => false,
+    };
+    let kept: Vec<DecodedFeature> = dec
+        .features
+        .iter()
+        .filter(|f| !is_replaced(f))
+        .cloned()
+        .collect();
+    let mut best: Option<(usize, usize, DecodedFeature, DecodedFeature)> = None;
+    for (opt, bits) in base.options.iter() {
+        let std = match option_std(opt) {
+            Some(s) => s,
+            None => continue,
+        };
+        let cls = match io_classes(std) {
+            Some(c) => c,
+            None => continue,
+        };
+        let noncode: Vec<_> = bits
+            .iter()
+            .filter(|cb| !code.contains(&(cb.frame, cb.bit)))
+            .collect();
+        if !noncode.iter().any(|cb| !cb.invert)
+            || !noncode
+                .iter()
+                .all(|cb| tile.cram.get(cb.frame, cb.bit) == !cb.invert)
+        {
+            continue;
+        }
+        let dname = format!("{}{}", drive_prefix, cls.drive);
+        let denum = match drives.iter().find(|(n, _)| *n == dname) {
+            Some((_, e)) => e,
+            None => continue,
+        };
+        let (dopt, dbits) = match tile.best_enum_match(denum) {
+            Some(m) => m,
+            None => continue,
+        };
+        let bf = DecodedFeature {
+            text: format!("{}.{}", base_name, opt),
+            enum_name: Some((base_name.clone(), opt.clone())),
+            bits: bits.iter().map(|cb| (cb.frame, cb.bit)).collect(),
+        };
+        let df = DecodedFeature {
+            text: format!("{}.{}", dname, dopt),
+            enum_name: Some((dname.clone(), dopt.clone())),
+            bits: dbits.iter().map(|cb| (cb.frame, cb.bit)).collect(),
+        };
+        let mut trial = kept.clone();
+        trial.push(bf.clone());
+        trial.push(df.clone());
+        let after = unexplained(tile, &trial, &dec.always_on);
+        if after.len() >= before.len() || !after.is_subset(&before) {
+            continue;
+        }
+        // fewest unexplained bits, then the most bits, then the last by name (the decoder's order)
+        let better = match &best {
+            None => true,
+            Some((n, len, _, _)) => after.len() < *n || (after.len() == *n && bits.len() >= *len),
+        };
+        if better {
+            best = Some((after.len(), bits.len(), bf, df));
+        }
+    }
+    if let Some((_, _, bf, df)) = best {
+        // the new lines go where the first replaced one was (enum lines are in name order)
+        let at = dec
+            .features
+            .iter()
+            .position(|f| is_replaced(f))
+            .unwrap_or(dec.features.len());
+        let mut out: Vec<DecodedFeature> = dec.features[..at]
+            .iter()
+            .filter(|f| !is_replaced(f))
+            .cloned()
+            .collect();
+        out.push(bf);
+        out.push(df);
+        out.extend(
+            dec.features[at..]
+                .iter()
+                .filter(|f| !is_replaced(f))
+                .cloned(),
+        );
+        dec.features = out;
+    }
+}
+
 /// The IO standard a PIO is configured for, from its BASE_TYPE decodes (differential first).
 fn pio_std(dec: &TileDecode, pio: &str) -> Option<String> {
     for kind in ["DIFFIO18", "SEIO18"] {
@@ -258,9 +409,11 @@ pub fn postprocess(chip: &Chip, db: &mut Database, decs: &mut [TileDecode]) {
         };
         let t0 = &chip.tiles[j];
         lvstl_single_ended(t0, d0, "PIOA");
+        base_type_with_drive(t0, d0, db, "PIOA");
         let std_a = pio_std(d0, "PIOA");
         voltage_select(t0, d0, "PIOA", std_a);
         pair_context(d0, t1, d1, db);
+        base_type_with_drive(t1, d1, db, "PIOB");
         let std_b = pio_std(d1, "PIOB");
         voltage_select(t1, d1, "PIOB", std_b);
     }

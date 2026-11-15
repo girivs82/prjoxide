@@ -42,7 +42,7 @@ existing one, so FASM that packed before packs to the same bitstream.
 ## Decode choices (lfcpnx_decode.rs, LFCPNX only)
 
 The tile decoder picks, per enum, the longest option whose bits all match. On these tiles that
-alone gives misleading output, so three post-passes run on LFCPNX decodes. Neither changes which bits
+alone gives misleading output, so four post-passes run on LFCPNX decodes. Neither changes which bits
 are explained (a feature is only relabelled to another matching option, or dropped when the
 remaining features explain all of its set bits), so packing the decoded FASM gives the same
 bitstream.
@@ -89,6 +89,18 @@ is dropped if the remaining features explain its bits.
   line.
 - The differential DQS pads keep theirs.
 - The FASM packs to the same bitstream.
+
+(d) **BASE_TYPE at a non-default drive.** A BASE_TYPE option was fuzzed at its IO type's default
+drive, so it includes that drive's code in the PIO's drive bits (PIOA F9B1-F13B1, PIOB F89B0-F93B0).
+At another drive the option no longer matches. An LVCMOS10H / LVCMOS12H bidir at 2-4 mA then
+decoded as BIDIR_SSTL15_II, with F17B1 / F75B0 / F86B0 left unknown.
+
+When a PIO's tile has unexplained bits, the pass looks for a BASE_TYPE option that matches outside
+the drive code, with a DRIVE option of its class (the table above) matching the code exactly. It
+takes it only if that leaves fewer unexplained bits and none that were explained before. The packer
+applies BASE_TYPE before the other enums, so BASE_TYPE plus DRIVE packs to the same bits.
+- On the routed IO designs every such pad now decodes as its source's IO type and drive.
+- 481 Radiant designs pack the same, and their unknown bits drop by 177.
 
 ## SSTL15_II / SSTL135_II drive
 
