@@ -4,7 +4,7 @@ Write the database descriptions that document the LFCPNX HP-IO (bank 3/4/5 SYSIO
 - enums with options whose bits are identical: the bitstream cannot tell them apart; the decoder
   emits the last of each group by name (the canonical option) and the description lists the others;
 - the voltage-specific DRIVE_<v> / TERMINATION_<v> enums share bits; the decoder keeps the one that
-  matches the PIO's BASE_TYPE (libprjoxide/prjoxide/src/lfcpnx_decode.rs);
+  matches the BASE_TYPE of the PIO (libprjoxide/prjoxide/src/lfcpnx_decode.rs);
 - the PIOA enums in the pair's second tile (SYSIO_B<n>_1*), which take the first tile's PIOA decode.
 
 Only `desc` fields are written; bits are not touched, so packing is unchanged.
@@ -23,9 +23,9 @@ OPT_RE = re.compile(r'^        "([^"]+)": \[(.*)\],$', re.M)
 
 VOLTAGE_DESC = {
     "DRIVE": "drive strength for {v} IO types. DRIVE_<v> enums share bits; the decoder keeps only the "
-             "one for the PIO's BASE_TYPE",
+             "one for the BASE_TYPE of the PIO",
     "TERMINATION": "on-die termination for {v} IO types. TERMINATION_<v> enums share bits; the decoder "
-                   "keeps only the one for the PIO's BASE_TYPE",
+                   "keeps only the one for the BASE_TYPE of the PIO",
 }
 VOLTS = {"1V8": "1.8 V", "1V5": "1.5 V", "1V35": "1.35 V", "1V2": "1.2 V", "1V1": "1.1 V (LVSTL_I)",
          "1V0": "1.0 V", "HSUL12": "HSUL12", "LVSTL": "LVSTL_I"}
@@ -37,7 +37,7 @@ def describe(tiletype, name, opts):
     if m:
         parts.append(VOLTAGE_DESC[m[1]].format(v=VOLTS.get(m[2], m[2])))
     if name.startswith("PIOA.") and re.match(r'SYSIO_B[345]_1', tiletype):
-        parts.append("PIOA's bits in the pair's second tile; the decoder takes the option the first tile "
+        parts.append("the bits of PIOA in the second tile of the pair; the decoder takes the option the first tile "
                      "decodes for PIOA (NONE when PIOA is unused)")
     groups = {}
     for o, bits in opts:

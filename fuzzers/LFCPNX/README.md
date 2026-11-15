@@ -103,22 +103,31 @@ explain all of its set bits, so decoding and then packing gives the same bitstre
 identical bits are listed in each enum's database description; the decoder emits the last one by
 name. LIFCL and LFD2NX decoding is unchanged.
 
-## DQSBUF bits from Radiant-built PHY designs (bank 3)
+## DQSBUF bits from Radiant-built PHY designs (banks 3, 4 and 5)
 
 Two bits that 153-dqsbuf's structural builds cannot set came from a Radiant-built LPDDR4-style
 byte-lane PHY (DQSBUF, DDRDLL, ODDRX4DQ / IDDRX4DQ / TSHX4DQ, DELAYA). It was built once per DQSBUF
 input: all fabric inputs tied to 0, then each one driven from a register in turn, plus DLLCODE tied
 to 0.
 
-- `DQSBUF.DLLCODE` (SYSIO_B3_0_DQS1 F45B1): set when DLLCODE is driven by the DDRDLL.
+- `DQSBUF.DLLCODE` (SYSIO_B3_0_DQS1 F45B1): set when DLLCODE comes from the right-side DDRDLL
+  (DDRDLL_CORE_R72C158). It is clear both when DLLCODE is tied to 0 and when it comes from the
+  left-side DDRDLL (DDRDLL_CORE_R68C1): the same bank 4 / 5 design built with the DDRDLL pinned to
+  each side sets it on every DQS group only with the right one. No bit tells "left DDRDLL" from
+  "tied to 0". The option keeps its name, DDRDLL.
 - `DQSBUF.DQSI` (SYSIO_B3_0_DQS3 F52B1): set in every such design. DQSI can only come from the
   group's DQS pad (Radiant refuses a fabric source), so this bit is not separable from that
   connection.
 
 None of the other inputs (RDCLKSEL, RDDIR, RDLOADN, READ, READMOVE, SELCLK, WRDIR, WRLOAD_N, WRLVDIR,
 WRLVLOAD_N, WRLVMOVE, WRMOVE) has a bit of its own. The same two bits were seen in banks 4 and 5
-(SYSIO_B4_0_DQS1 / _DQS3, SYSIO_B5_0_DQS1 / _DQS3) in 037-ivref's designs and are written there too
-(`153-dqsbuf/write_phy_bits.py`).
+(SYSIO_B4_0_DQS1 / _DQS3, SYSIO_B5_0_DQS1 / _DQS3, and the bank-4 middle group's
+SYSIO_B4_0_DQS1_MID / _DQS3_MID) and are written there too (`153-dqsbuf/write_phy_bits.py`).
+
+Bank 4's middle DQS group (tile types SYSIO_B4_*_DQS<k>_MID, C63-C67) is a group of its own: its
+DQS pad is PB66A (AF21), not PB64A, and its DQSBUFA is DQSBUFA_CORE_R73C62 (one column left of its
+DQS0 tile, where the other groups' sites are three columns left). Its DQSBUF settings are in the same
+places as in the other groups' five tiles (153-dqsbuf, group DQSB4M).
 
 F62B0 (first tile) / F63B0 (second tile) of every DQS-group IOLOGIC whose output is clocked by
 DQSW or DQSW270 is `IOLOGIC<x>.MODDRXN.DQSW_CLK`, from the same PHY designs; see

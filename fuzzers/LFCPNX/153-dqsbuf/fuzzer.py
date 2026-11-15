@@ -1,9 +1,11 @@
 """
 DQSBUF settings on LFCPNX-100 (DQSBUFA_CORE): LIFCL's 153-dqsbuf settings, on one DQS group per HP
-bank (3, 4, 5), written into that group's five SYSIO_B<n>_*_DQS<k> tile types. The DQSBUFA site of
-each group is found by building the primitive at candidate sites (Radiant accepts only the real one).
+bank (3, 4, 5), plus bank 4's middle group, which has tile types of its own (SYSIO_B4_*_DQS<k>_MID),
+written into that group's five SYSIO_B<n>_*_DQS<k> tile types. Each group's DQSBUFA site is taken
+from Radiant's placement of a PHY design on that group, and checked by building the primitive there:
+Radiant warns about a wrong site and leaves the instance unplaced.
 
-Usage: fuzzer.py
+Usage: [DQS_GROUPS=job:dqs0_col:site_col,...] fuzzer.py
 """
 import importlib.util
 import json
@@ -20,7 +22,13 @@ _spec = importlib.util.spec_from_file_location(
     "iol070", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "070-iologic_mode", "fuzzer.py"))
 _spec.loader.exec_module(importlib.util.module_from_spec(_spec))   # robust enum wrapper, work-dir cleanup
 
-GROUPS = [("DQSB3", 149), ("DQSB4", 53), ("DQSB5", 5)]   # (job, column of the group's DQS0 tile), row 74
+# (job, column of the group's DQS0 tile (row 74), column of its DQSBUFA_CORE site (row 73)). Bank 4 has
+# a second kind of group, its middle one (SYSIO_B4_*_DQS<k>_MID, C63-C67), with tile types of its own
+# and its DQSBUFA at R73C62 (from Radiant's placement of a PHY design on it; its DQS pad is PB66A).
+# DQS_GROUPS="DQSB4M:63:62,..." picks groups.
+GROUPS = [("DQSB3", 149, 146), ("DQSB4", 53, 50), ("DQSB4M", 63, 62), ("DQSB5", 5, 2)]
+if os.environ.get("DQS_GROUPS"):
+    GROUPS = [(j, int(c), int(sc)) for j, c, sc in (g.split(":") for g in os.environ["DQS_GROUPS"].split(","))]
 
 
 def group_tiles(c0):
@@ -33,15 +41,15 @@ def group_tiles(c0):
 
 def main():
     def per_group(x):
-        job, c0 = x
+        job, c0, sc = x
         cfg = FuzzConfig(job=job, device="LFCPNX-100", sv="../shared/empty_100.v", tiles=group_tiles(c0))
         cfg.setup()
         empty = cfg.build_design(cfg.sv, {})
         cfg.sv = "dqsbuf_100.v"
-        # Site: row 73, three columns left of the group's DQS0 tile (DQSBUFA_CORE_R73C146 for the bank-3
-        # group at C149, from Radiant's timing report of a placed DQSBUFA). Radiant only warns about an
-        # invalid site and leaves the instance unplaced, so check its log for that.
-        site = "DQSBUFA_CORE_R73C{}".format(c0 - 3)
+        # Site: from Radiant's timing report of a placed DQSBUFA (DQSBUFA_CORE_R73C146 for the bank-3
+        # group at C149). Radiant only warns about an invalid site and leaves the instance unplaced, so
+        # check its log for that.
+        site = "DQSBUFA_CORE_R73C{}".format(sc)
         desfile = os.path.join(cfg.workdir, "probe_design.v")
         with open(cfg.sv) as inf, open(desfile, "w") as ouf:
             ouf.write(string.Template(inf.read()).substitute(mode="DQSBUFA_CORE", cmt="", config="", site=site,

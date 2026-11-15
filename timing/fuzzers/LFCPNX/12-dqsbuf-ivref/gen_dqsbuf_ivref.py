@@ -13,6 +13,9 @@
 #   GROUPS="[(dqs pad, [dq pads], use_ivref), ...]" overrides the groups (single-bank probes).
 #   FABCLK=clk|dcc|lut|eclk also uses DQSR90 / DQSW / DQSW270 in fabric (a register clock, a DCC, a
 #   LUT input, an ECLKSYNC); map refuses all of them (see fuzzers/LFCPNX/037-ivref/README.md).
+#   GEAR=X2 builds X2 gearing instead of X4 (ODDRX2DQ / ODDRX2DQS / TSHX2DQ / TSHX2DQS / IDDRX2DQ,
+#   ECLKDIV 2, DQSBUF MODX=MDDRX2); for the X2 DDRMODE / DQSW_CLK bits of 156-dqsw-iologic.
+#   DQS_SE=1 makes every DQS pad single-ended (LVSTL_I), so a DQ can go on its complement pad.
 import random
 import sys
 
@@ -30,6 +33,11 @@ OUT_PINS = [("BTDETECT", 0), ("BURSTDETECT", 0), ("DATAVALID", 0), ("READCOUT", 
             ("WRLVCOUT", 0), ("DQSWRD", 0)]
 
 base = sys.argv[1]
+X2 = os.environ.get("GEAR") == "X2"
+NW = 4 if X2 else 8          # data bits per output gearing cell
+NT = 2 if X2 else 4          # tristate bits
+GX = "X2" if X2 else "X4"
+DQS_IO = "LVSTL_I" if os.environ.get("DQS_SE") == "1" else "LVSTLD_I"
 v, pdc = [], []
 src = 0
 cap = []
@@ -49,7 +57,7 @@ pdc += ["ldc_set_location -site {AB19} [get_ports refclk]",
         "ldc_set_location -site {M9} [get_ports q]", "ldc_set_port -iobuf {IO_TYPE=LVCMOS33} [get_ports q]"]
 body = ["    wire eclk, sclk; wire [8:0] code; wire lock;",
         '    ECLKSYNC #(.STOP_EN("DISABLE")) u_es (.ECLKIN(refclk), .STOP(1\'b0), .ECLKOUT(eclk));',
-        '    ECLKDIV #(.ECLK_DIV("4"), .GSR("DISABLED")) u_ed (.ECLKIN(eclk), .DIVRST(1\'b0), .SLIP(1\'b0), .DIVOUT(sclk));']
+        '    ECLKDIV #(.ECLK_DIV("{}"), .GSR("DISABLED")) u_ed (.ECLKIN(eclk), .DIVRST(1\'b0), .SLIP(1\'b0), .DIVOUT(sclk));'.format("2" if X2 else "4")]
 body.append('    DDRDLL #(.GSR("DISABLED")) u_dll (.CLKIN(eclk), .RST({}), .FREEZE({}), .UDDCNTL_N({}), .CODE(code), .LOCK(lock), .DCNTL());'
             .format(sreg(1), sreg(1), sreg(1)))
 cap.append("lock")
@@ -58,7 +66,7 @@ for g, grp in enumerate(GROUPS):
     ivref = grp[2] if len(grp) > 2 else True
     ports += ["inout dqs{}".format(g), "inout [{}:0] dq{}".format(len(dqs_dq) - 1, g)]
     pdc += ["ldc_set_location -site {{{}}} [get_ports dqs{}]".format(dqs, g),
-            "ldc_set_port -iobuf {{IO_TYPE=LVSTLD_I}} [get_ports dqs{}]".format(g)]
+            "ldc_set_port -iobuf {{IO_TYPE={}}} [get_ports dqs{}]".format(DQS_IO, g)]
     for i, p in enumerate(dqs_dq):
         pdc += ["ldc_set_location -site {{{}}} [get_ports {{dq{}[{}]}}]".format(p, g, i),
                 "ldc_set_port -iobuf {{IO_TYPE=LVSTL_I}} [get_ports {{dq{}[{}]}}]".format(g, i)]
@@ -95,28 +103,28 @@ for g, grp in enumerate(GROUPS):
         body.append("    wire {};".format(o))
         conns.append(".{}({})".format(name, o))
         cap.append(o)
-    body.append('    ' + ('DQSBUF_IVREF' if ivref else 'DQSBUF') + ' #(.GSR("DISABLED"), .ENABLE_FIFO("ENABLED"), .MODX("MDDRX4"), .READ_ENABLE("ENABLED"), '
-                '.WRITE_ENABLE("ENABLED")) u_dqs{} ({});'.format(g, ", ".join(conns)))
+    body.append('    ' + ('DQSBUF_IVREF' if ivref else 'DQSBUF') + ' #(.GSR("DISABLED"), .ENABLE_FIFO("ENABLED"), .MODX("MDDR{}"), .READ_ENABLE("ENABLED"), '
+                '.WRITE_ENABLE("ENABLED")) u_dqs{} ({});'.format(GX, g, ", ".join(conns)))
     rst = sreg(1)
-    body.append('    ODDRX4DQS #(.GSR("DISABLED")) u_dqso{} (.D0({}),.D1({}),.D2({}),.D3({}),.D4({}),.D5({}),.D6({}),.D7({}), '
-                '.DQSW({w}w), .ECLK(eclk), .SCLK(sclk), .RST({}), .Q({w}dqso));'.format(
-                    g, *[sreg(1) for _ in range(8)], rst, w=w))
-    body.append('    TSHX4DQS #(.GSR("DISABLED")) u_dqst{} (.T0({}),.T1({}),.T2({}),.T3({}), .DQSW({w}w), .ECLK(eclk), '
-                '.SCLK(sclk), .RST({}), .Q({w}dqst));'.format(g, *[sreg(1) for _ in range(4)], rst, w=w))
+    def dpins(p, n):
+        return ",".join(".{}{}({})".format(p, k, sreg(1)) for k in range(n))
+    body.append('    ODDR{}DQS #(.GSR("DISABLED")) u_dqso{} ({}, .DQSW({w}w), .ECLK(eclk), .SCLK(sclk), .RST({}), '
+                '.Q({w}dqso));'.format(GX, g, dpins("D", NW), rst, w=w))
+    body.append('    TSH{}DQS #(.GSR("DISABLED")) u_dqst{} ({}, .DQSW({w}w), .ECLK(eclk), .SCLK(sclk), .RST({}), '
+                '.Q({w}dqst));'.format(GX, g, dpins("T", NT), rst, w=w))
     body.append("    assign dqs{0} = {1}dqst ? 1'bz : {1}dqso; assign {1}dqsi = dqs{0};".format(g, w))
     for i in range(len(dqs_dq)):
         x = "{}d{}_".format(w, i)
-        body.append("    wire {0}o, {0}t; wire [7:0] {0}q;".format(x))
-        body.append('    ODDRX4DQ #(.GSR("DISABLED")) u_{x}o (.D0({}),.D1({}),.D2({}),.D3({}),.D4({}),.D5({}),.D6({}),.D7({}), '
-                    '.DQSW270({w}w270), .ECLK(eclk), .SCLK(sclk), .RST({}), .Q({x}o));'.format(
-                        *[sreg(1) for _ in range(8)], rst, w=w, x=x))
-        body.append('    TSHX4DQ #(.GSR("DISABLED")) u_{x}t (.T0({}),.T1({}),.T2({}),.T3({}), .DQSW270({w}w270), .ECLK(eclk), '
-                    '.SCLK(sclk), .RST({}), .Q({x}t));'.format(*[sreg(1) for _ in range(4)], rst, w=w, x=x))
+        body.append("    wire {0}o, {0}t; wire [{1}:0] {0}q;".format(x, NW - 1))
+        body.append('    ODDR{}DQ #(.GSR("DISABLED")) u_{x}o ({}, .DQSW270({w}w270), .ECLK(eclk), .SCLK(sclk), .RST({}), '
+                    '.Q({x}o));'.format(GX, dpins("D", NW), rst, w=w, x=x))
+        body.append('    TSH{}DQ #(.GSR("DISABLED")) u_{x}t ({}, .DQSW270({w}w270), .ECLK(eclk), .SCLK(sclk), .RST({}), '
+                    '.Q({x}t));'.format(GX, dpins("T", NT), rst, w=w, x=x))
         body.append("    assign dq{g}[{i}] = {x}t ? 1'bz : {x}o;".format(g=g, i=i, x=x))
-        body.append('    IDDRX4DQ #(.GSR("DISABLED")) u_{x}i (.D(dq{g}[{i}]), .DQSR90({w}r90), .ECLK(eclk), .SCLK(sclk), .RST({r}), '
+        body.append('    IDDR{gx}DQ #(.GSR("DISABLED")) u_{x}i (.D(dq{g}[{i}]), .DQSR90({w}r90), .ECLK(eclk), .SCLK(sclk), .RST({r}), '
                     '.RDPNTR0({w}rdp[0]), .RDPNTR1({w}rdp[1]), .RDPNTR2({w}rdp[2]), .WRPNTR0({w}wrp[0]), .WRPNTR1({w}wrp[1]), '
-                    '.WRPNTR2({w}wrp[2]), .Q0({x}q[0]),.Q1({x}q[1]),.Q2({x}q[2]),.Q3({x}q[3]),.Q4({x}q[4]),.Q5({x}q[5]),'
-                    '.Q6({x}q[6]),.Q7({x}q[7]));'.format(g=g, i=i, x=x, w=w, r=rst))
+                    '.WRPNTR2({w}wrp[2]), {q});'.format(g=g, i=i, x=x, w=w, r=rst, gx=GX,
+                                                       q=",".join(".Q{0}({1}q[{0}])".format(k, x) for k in range(NW))))
         cap.append("^{}q".format(x))
 
 v.append("module top({});".format(", ".join(ports)))
