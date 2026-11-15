@@ -18,6 +18,7 @@ Two kinds of results come out of this work; keep them apart when reviewing.
 | `031-io_mode` | PIO enums for every SEIO33 SYSIO tile type (B0/B1/B2/B6/B7 EVEN/ODD, B1_DED, B1/B2/B6/B7 `_0_C` and `_0_REM`). Radiant 2026.1 rejects `INPUT_LVCMOS10` on SEIO33, so it is absent. |
 | `032-hsio_mode` | PIO enums for the HP-bank SYSIO tile types (B3/B4/B5, incl. DQS/V18/ECLK variants). On LFCPNX the primitives are `SEIO18A_CORE`/`DIFFIO18A_CORE`. |
 | `036-hsio-vref` | LVSTL_I/II and LVSTLD_I/II on the HP banks (BASE_TYPE, DRIVE_LVSTL, TERMINATION_1V1, VREF_LVSTL), the referenced-standard slew rate (SLEWRATE_REF), and the LVSTL bank / chip bits (BANKREF, DOSCL_P18). Its README also documents the LFCPNX decode choices below. |
+| `037-ivref` | The LVSTL internal input reference: `BANK<n>.IVREF` and the IVREF_CORE `IVREFI[6:0]` connections (DQSBUF_IVREF), from Radiant-built designs; see its README. |
 | `060-ebr-config`, `080-dsp-config` | EBR, MIB_EBR and DSP configuration bits. |
 | `122-pll-config` | GPLL_{ULC,URC,LLC,LRC} enums (CLKMUX_FB, LMMICLK/LMMIRESETN inversion). LLC/LRC/ULC match LIFCL bit for bit; no MODE bit appears in the GPLL tiles on LFCPNX. |
 
@@ -115,7 +116,9 @@ to 0.
   connection.
 
 None of the other inputs (RDCLKSEL, RDDIR, RDLOADN, READ, READMOVE, SELCLK, WRDIR, WRLOAD_N, WRLVDIR,
-WRLVLOAD_N, WRLVMOVE, WRMOVE) has a bit of its own. Banks 4 and 5 have not been built this way.
+WRLVLOAD_N, WRLVMOVE, WRMOVE) has a bit of its own. The same two bits were seen in banks 4 and 5
+(SYSIO_B4_0_DQS1 / _DQS3, SYSIO_B5_0_DQS1 / _DQS3) in 037-ivref's designs and are written there too
+(`153-dqsbuf/write_phy_bits.py`).
 
 F62B0 (first tile) / F63B0 (second tile) of every DQS-group IOLOGIC whose output is clocked by
 DQSW or DQSW270 is `IOLOGIC<x>.MODDRXN.DQSW_CLK`, from the same PHY designs; see

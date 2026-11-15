@@ -44,4 +44,6 @@ It was seen with the same bit on every bank-3 tile type that holds an IOLOGIC in
 
 `write_db.py` writes the enum. It is a new enum only, so existing FASM packs unchanged.
 
-Not covered: banks 4 and 5, and X2 gearing (MODDRX2_*).
+Banks 4 and 5: the same bits were seen in 037-ivref's DQSBUF_IVREF designs on SYSIO_B4_0,
+_0_DQS1, B4_1_DQS0, B5_0, B5_0_DQS1 and B5_1_V18_51, and are written there; their other tile types
+are not covered. X2 gearing (MODDRX2_*) is not covered.

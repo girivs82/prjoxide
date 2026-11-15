@@ -16,13 +16,16 @@ root = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.pat
                                                             "..", "..", "..", "database")
 DESC = ("output gearing clocked by the DQSBUF of the DQS group (DQSW or DQSW270: ODDRX4DQ, ODDRX4DQS), "
         "set with MODDRXN.DDRMODE MODDRX*_DQSW*; the structural MODDRXN builds of 070 (no DQSBUF "
-        "connected) do not set it. From Radiant-built PHY designs in bank 3 (X4 gearing)")
+        "connected) do not set it. From Radiant-built PHY designs (X4 gearing)")
 # tile type -> (enum, frame, bit)
 BITS = {}
-for t in ("SYSIO_B3_0", "SYSIO_B3_0_DQS1", "SYSIO_B3_0_DQS3"):
+# bank 3 from this fuzzer's designs; banks 4 / 5 from the DQSBUF_IVREF designs
+# (timing/fuzzers/LFCPNX/12-dqsbuf-ivref), only the tile types seen there
+for t in ("SYSIO_B3_0", "SYSIO_B3_0_DQS1", "SYSIO_B3_0_DQS3", "SYSIO_B4_0", "SYSIO_B4_0_DQS1", "SYSIO_B5_0",
+          "SYSIO_B5_0_DQS1"):
     BITS[t] = ("IOLOGICA.MODDRXN.DQSW_CLK", 62, 0)
 for t in ("SYSIO_B3_1", "SYSIO_B3_1_DQS0", "SYSIO_B3_1_DQS2", "SYSIO_B3_1_DQS4", "SYSIO_B3_1_V18",
-          "SYSIO_B3_1_V18_32", "SYSIO_B3_1_ECLK_R"):
+          "SYSIO_B3_1_V18_32", "SYSIO_B3_1_ECLK_R", "SYSIO_B4_1_DQS0", "SYSIO_B5_1_V18_51"):
     BITS[t] = ("IOLOGICB.MODDRXN.DQSW_CLK", 63, 0)
 
 

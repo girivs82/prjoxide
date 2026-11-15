@@ -34,3 +34,7 @@ interconnect solve; cell timings come from the SDF and are unaffected):
   blocks yet. EBR arcs use LIFCL's EBR tile connections as candidates, accepted
   only where the trace reaches the SDF source pin.
 - 05-clock: PLL, DCC, DCS and ECLKDIV pins are not mapped yet.
+
+12-dqsbuf-ivref: one DQSBUF_IVREF per bank (3, 4, 5) with every input registered, for the
+IVREF_CORE IVREFI connections (tools/radiant-fuzz/infer_dqsbuf_conns.py; see
+fuzzers/LFCPNX/037-ivref). Not part of the timing solve.
