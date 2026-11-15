@@ -13,7 +13,7 @@ left and at least MIN_ARCS arcs agree, every arc offering it. Pin wires are name
 tile type: W1:J<pin>_ADC_CORE_ADC0, relative to the ADC tile (the site is one column left of it).
 
 Usage (in the container, PYTHONPATH with util/common, util/fuzz, timing/util and this directory):
-  infer_adc_conns.py <out.json> <design dir>... [--write]
+  infer_adc_conns.py <out.json> <design dir>... [--write] [--runs=A-B]
 """
 import glob
 import json
@@ -28,6 +28,8 @@ import infer_block_conns as B
 
 SITE_RE = re.compile(r'^ADC_CORE(?:_ADC_CORE)?_R(\d+)C(\d+)$')
 MIN_ARCS = 10
+# --runs A-B: only those runs (to judge a batch on its own)
+RUNS = None
 
 
 def adc_tile(dev, r, c):
@@ -38,7 +40,12 @@ def adc_tile(dev, r, c):
 
 
 def main():
+    global RUNS
     out_json, write = sys.argv[1], "--write" in sys.argv
+    for a in sys.argv:
+        if a.startswith("--runs="):
+            lo, hi = a.split("=")[1].split("-")
+            RUNS = set(range(int(lo), int(hi) + 1))
     dirs = [a for a in sys.argv[2:] if not a.startswith("--")]
     dev = E.Device(E.FAMILY, E.DEVICE)
     cands, counts = {}, defaultdict(int)
@@ -48,6 +55,8 @@ def main():
         outdir = path.join(d, "..", "..", "..", "output", "LFCPNX")
         for fasm in sorted(glob.glob(path.join(d, "work", "design_*.fasm"))):
             i = re.search(r'design_(\w+)\.fasm', fasm).group(1)
+            if RUNS and int(i) not in RUNS:
+                continue
             vo = path.join(outdir, "{}_{}_9.vo".format(name, i))
             if not path.exists(vo):
                 continue

@@ -45,18 +45,25 @@ The method is `tools/radiant-fuzz/infer_adc_conns.py`, as for the LRAM / DQSBUF 
 Radiant-routed designs drive every input from its own register and capture every output. A pin
 is written only when one wire is left and all of at least 10 arcs agree.
 
-- **48 of 49 pins resolved**, 12 arcs each, written to the ADC tile type as
-  `W1:J<pin>_ADC_CORE_ADC0` (LIFCL's naming).
-  - Inputs come from CIBMUXOUT / CE wires next to the block; e.g. CHASEL0-3 <- S1W1:JCIBMUXOUTA0-3.
+- **All 50 pins connected.** The 48 traced fabric pins, plus CHBSEL3 and CLKFAB, are written to
+  the ADC tile type as `W1:J<pin>_ADC_CORE_ADC0` (LIFCL's naming).
+  - Inputs come from CIBMUXOUT / CE wires next to the block; e.g. CHASEL0-3 <- S1W1:JCIBMUXOUTA0-3,
+    CHBSEL0-3 <- S1W1:JCIBMUXOUTA4-7.
   - Outputs enter the CIB at JF / JQ *_CIBTEST wires; e.g. DA0-6 -> W1:JF0-6_CIBTEST,
     DB3-6 -> W1:JQ3-6_CIBTEST.
-- 45 of them agree with LIFCL's ADC tile type. The 3 that do not are COMP1O / COMP2O / COMP3O:
-  S2W1:JF0/1/2_CIBTEST here, N2W1:JQ0/1/2 in LIFCL.
-- Not resolved:
-  - CHBSEL3: 11 of 12 arcs give S1W1:JCIBMUXOUTA7, which is LIFCL's wire and continues
-    CHBSEL0-2 = A4-A6, but one arc does not, so it is not written;
-  - CLKFAB: a clock on the global network, so it has no SDF interconnect arc to trace;
-  - the RSVDH / RSVDL inputs, which the primitive ties off.
+- Two batches of 12 designs (runs 1-12, 13-24):
+  - 46 pins are unanimous over all 24 arcs.
+  - CHASEL2, CHASEL3 and CHBSEL3 are unanimous within one batch of 12 and have one dissenting arc
+    in the other: 23/24, 22/23 and 23/24. Their A-wires often have no explicit pip (the CIBMUX
+    takes its zero-bit default), so the dissent is most likely a tracing artifact. All three
+    follow the regular A0-A7 pattern and agree with LIFCL.
+- CLKFAB is a clock, so it has no SDF arc. Its connection is read from the routing: every design
+  feeds it through the clock-branch pip into R69C158 JCLK0, i.e. `W1:JCLKFAB_ADC_CORE_ADC0 <-
+  S1W1:JCLK0` (the same as LIFCL). That is the same wire for a pin clock (all 24 runs), the internal
+  oscillator and a PLL_LRC output; only the branch feeding JCLK0 differs.
+- 47 agree with LIFCL. The 3 that do not are COMP1O / COMP2O / COMP3O: S2W1:JF0/1/2_CIBTEST here,
+  N2W1:JQ0/1/2 in LIFCL.
+- RSVDH / RSVDL are tied off by the primitive.
 
 ## Analog inputs on the Versa board
 
