@@ -17,7 +17,9 @@ inferred and written relative to the bank's reference tile (BANK_REF below, the 
 BANK<n>.IVREF), with the pin wires J<pin>_IVREF_CORE in that tile.
 
 --check: compare the DQSBUFA pins inferred with the connections already in the database.
---replace: for DQSBUFA input pins resolved unanimously by at least MIN_REPLACE_ARCS arcs, replace the
+Output pins (to the fabric) are traced backward from the capturing register to where the route starts
+near the block (as infer_block_conns.py does for LRAM outputs).
+--replace: for DQSBUFA input and output pins resolved unanimously by at least MIN_REPLACE_ARCS arcs, replace the
 database's connection of that pin (from LIFCL) with the inferred one; pins Radiant does not
 contradict are left as they are.
 
@@ -66,6 +68,32 @@ def replace_conns(tt, conns):
     print("  {}: {} connections replaced".format(tt, len(conns)))
 
 
+def replace_out_conns(tt, conns):
+    """Output pins: the pin wire drives the inferred wire; drop the pin's other (LIFCL) targets."""
+    import database
+    fn = path.join(database.get_db_root(), "LFCPNX", "tiletypes", tt + ".ron")
+    t = open(fn).read()
+    ci = t.index("\n  conns: {")
+    head, rest = t[:ci], t[ci:]
+    have = {}
+    for to, body in re.findall(r'\n    "([^"]+)": \[(.*?)\n    \],', rest, re.S):
+        have[to] = re.findall(r'from_wire: "([^"]+)"', body)
+    for to, frm in conns:
+        for k in list(have):
+            if frm in have[k] and k != to:
+                have[k] = [x for x in have[k] if x != frm]
+                if not have[k]:
+                    del have[k]
+        have.setdefault(to, [])
+        if frm not in have[to]:
+            have[to].append(frm)
+    body = "".join('    "{}": [\n{}    ],\n'.format(
+        to, "".join('      (\n        from_wire: "{}",\n      ),\n'.format(fw) for fw in sorted(fws)))
+        for to, fws in sorted(have.items()))
+    open(fn, "w").write(head + "\n  conns: {\n" + body + "  },\n)\n")
+    print("  {}: {} output connections replaced".format(tt, len(conns)))
+
+
 def dqs0_tile(dev, r, c):
     for tt in dev.tiles_at.get((r + 1, c + 3), ()):
         if re.match(r'SYSIO_B[345]_1_DQS0', tt):
@@ -108,8 +136,42 @@ def main():
                     for f, t in sorted(sdf.interconnect.keys())]
             E.place_from_routing(dev, routing, arcs, site)
             fw = B.Forward(dev, routing)
+
+            def drv(k):
+                # the database's own block-pin connections (what is being checked) end the trace
+                return [s_ for s_ in routing.drivers(k) if not (s_[0] == "W" and isinstance(s_[3], str) and s_[3].endswith("_DQSBUFA_CORE_I_DQS_TOP"))]
             reach_cache = {}
             for src, dst in arcs:
+                if src[0].endswith("DQSBUFA_inst") and src[0] in site and dst[0] in site:
+                    # an output pin: where the sink's route starts near the block
+                    m = SITE_RE.match(site[src[0]])
+                    t = dqs0_tile(dev, int(m.group(1)), int(m.group(2))) if m else None
+                    if t is None:
+                        continue
+                    r, c = int(m.group(1)), int(m.group(2))
+                    tt, tr, tc = t
+                    pin_w = ("W", tr - 1, tc - 5, "J{}_DQSBUFA_CORE_I_DQS_TOP".format(src[1]))
+                    cs = set()
+                    for dk in E.pin_keys(dev, site[dst[0]], dst[1], routing, {}):
+                        parent = {dk: None}
+                        fr = [dk]
+                        while fr and len(parent) < 20000:
+                            nx = []
+                            for k in fr:
+                                for s_ in drv(k):
+                                    if s_ not in parent:
+                                        parent[s_] = k
+                                        nx.append(s_)
+                            fr = nx
+                        cs |= {(B.rel(k, tr, tc), B.rel(pin_w, tr, tc)) for k in parent
+                               if B.near(k, r, c, dev) and not drv(k)}
+                    key = (tt, "DQSBUFA_CORE_OUT", src[1])
+                    if cs:
+                        cands[key] = cs if key not in cands else cands[key] & cs
+                        counts[key] += 1
+                        for c_ in cs:
+                            votes[key][c_] += 1
+                    continue
                 cell, pin = dst
                 blk = next((b for k, b in BLOCKS.items() if cell.endswith(k)), None)
                 if blk is None or cell not in site or src[0] not in site:
@@ -170,6 +232,14 @@ def main():
                 have[to] |= set(re.findall(r'from_wire: "([^"]+)"', body))
             ok = bad = new = 0
             for to, frm, n, blk in result[tt]:
+                if blk == "DQSBUFA_CORE_OUT":
+                    if frm in have.get(to, ()):
+                        ok += 1
+                    else:
+                        bad += 1
+                        print("   MISMATCH {} -> inferred {}, database {}".format(
+                            frm, to, sorted(k for k, v in have.items() if frm in v)))
+                    continue
                 if to not in have:
                     new += 1
                 elif frm in have[to]:
@@ -184,13 +254,19 @@ def main():
     if replace:
         for tt in sorted(result):
             unan = []
+            outs = []
             for to, frm, n, blk in result[tt]:
-                rep = report["{} {} {}".format(tt, blk, re.match(r'N1W5:J(.*)_DQSBUFA_CORE_I_DQS_TOP', to).group(1))] \
-                    if blk == "DQSBUFA_CORE" else None
-                if rep and len(rep["candidates"]) == 1 and rep["votes"][0][1] == n and n >= MIN_REPLACE_ARCS:
-                    unan.append((to, frm))
+                if blk == "IVREF_CORE":
+                    continue
+                pinw = to if blk == "DQSBUFA_CORE" else frm
+                pin = re.match(r'N1W5:J(.*)_DQSBUFA_CORE_I_DQS_TOP', pinw).group(1)
+                rep = report["{} {} {}".format(tt, blk, pin)]
+                if len(rep["candidates"]) == 1 and rep["votes"][0][1] == n and n >= MIN_REPLACE_ARCS:
+                    (unan if blk == "DQSBUFA_CORE" else outs).append((to, frm))
             if unan:
                 replace_conns(tt, unan)
+            if outs:
+                replace_out_conns(tt, outs)
     amb = sum(1 for v in report.values() if len(v["candidates"]) != 1 and not v.get("by_vote"))
     print("{} pins with several or no candidates".format(amb))
 

@@ -69,9 +69,26 @@ Check on other designs: timing/fuzzers/LFCPNX/13-dqsbuf-phy-check puts the bank-
 156-dqsw-iologic (phy1 and four lane-moved variants) through the same flow. `--check` on those
 5 designs alone gives the same wire for 20 pins (5 arcs each). For RST, which in that PHY shares its
 net with every IOLOGIC reset, the trace leaves 9 LSR candidates; the new wire is among them, so
-nothing contradicts it. The DQSBUFA outputs to the fabric (BTDETECT, BURSTDETECT, DATAVALID,
-READCOUT, WRCOUT, WRLVCOUT, DQSWRD, RDPNTR, WRPNTR) still have LIFCL's connections and are
-unchecked.
+nothing contradicts it.
+
+The outputs to the fabric were checked the same way. The trace runs backward from the capturing
+register to where the route starts near the block, ignoring the database's own pin connections.
+Each output drives a JQ7_CIBTEST wire of its own, unanimous over 12 arcs on banks 3, 4 and 5,
+and the same on all 5 PHY designs (5 arcs each):
+
+| Output | Drives |
+|---|---|
+| BTDETECT | `N1:JQ7_CIBTEST` |
+| BURSTDETECT | `N1E1:JQ7_CIBTEST` |
+| READCOUT | `N1E2:JQ7_CIBTEST` |
+| DQSWRD | `N1E3:JQ7_CIBTEST` |
+| DATAVALID | `N1E4:JQ7_CIBTEST` |
+| WRCOUT | `N1E6:JQ7_CIBTEST` |
+| WRLVCOUT | `N1W1:JQ7_CIBTEST` |
+
+These replace LIFCL's JQ6 / JQ7 targets. The DQS-clock outputs to the fabric (SR90CIB, SW270CIB,
+DQSWCIB) keep LIFCL's connections: no design drives fabric from them, so they are unchecked.
+RDPNTR / WRPNTR have no fabric connections; they reach the IDDRX4DQ through dedicated paths.
 
 ## Not resolved here
 
