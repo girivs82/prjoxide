@@ -76,6 +76,63 @@ iol_dly_sigs = ["INDD", "DIR", "LOAD_N", "MOVE", "CFLAG"]
 
 subtracts = {}
 
+# LFCPNX DDR blocks: (prefix of the SDF sub-cell model, table name)
+ddr_block_types = [
+    ("DQSBUFA_CORE", "DQSBUF"),
+    ("DDRDLL_CORE", "DDRDLL"),
+    ("ECLKSYNC_CORE", "ECLKSYNC"),
+    ("ECLKDIV_CORE", "ECLKDIV"),
+]
+
+
+DDR_BUS_PINS = ("RXDATA", "TXDATA", "TSDATA", "RDPNTR", "WRPNTR", "READ", "RDCLKSEL", "CODE", "DLLCODE",
+                "IVREFI")
+
+
+def strip_bus(pin):
+    """RXDATA2 -> RXDATA, RDPNTR0 -> RDPNTR: the bits of a bus share their delays (only these buses;
+    a clock such as DQSR90 keeps its name)."""
+    for b in DDR_BUS_PINS:
+        if pin.startswith(b) and pin[len(b):].isdigit():
+            return b
+    return pin
+
+
+def rewrite_iol(mod_cells, from_pin, to_pin):
+    """A Radiant '*_IOL' cell (LFCPNX DDR IO logic): the gearing sub-cells MODDRXN (output), MTDDRXN
+    (tristate), MIDDRXN (input), ODDRXN (plain output gearing) and DELAYC (delay). The SDF arcs are on
+    the IOL cell, so each is given to the sub-cell its pins belong to. The x4 DQ cells are named as
+    Radiant's primitives: an IOL with an input gearing cell is a DQ / DMI pin (ODDRX4DQ, TSHX4DQ,
+    IDDRX4DQ), one with only output and tristate gearing a DQS pin (ODDRX4DQS, TSHX4DQS)."""
+    types = [c["type"] for c in mod_cells.values()]
+    has = lambda p: any(t.startswith(p) for t in types)
+    dq = has("MIDDRXN")
+    fp, tp = strip_bus(from_pin), strip_bus(to_pin)
+    if tp == "TOUT" or fp == "TSDATA":
+        role = "tri"
+    elif tp == "DOUT" or fp == "TXDATA" or (fp == "LSROUT") or tp == "SCLKOUT":
+        role = "out"
+    elif tp == "RXDATA" or fp in ("DI", "RDPNTR", "WRPNTR", "LSRIN") or tp in ("DQSR90", "SCLKIN"):
+        role = "in"
+    else:
+        return None
+    if role == "out":
+        if has("MODDRXN"):
+            name = "ODDRX4DQ" if dq else "ODDRX4DQS"
+        elif has("ODDRXN"):
+            name = "ODDRXN" + (":DELAYED" if has("DELAYC") else "")
+        else:
+            return None
+    elif role == "tri":
+        if not has("MTDDRXN"):
+            return None
+        name = "TSHX4DQ" if dq else "TSHX4DQS"
+    else:
+        if not dq:
+            return None
+        name = "IDDRX4DQ" + (":DELAYED" if has("DELAYC") else "")
+    return ("IOLOGIC:" + name, fp, tp)
+
 def rewrite_path(modules, modtype, from_pin, to_pin):
     # Rewrite a (celltype, from_pin, to_pin) tuple given cell data, or returns None to drop the path
     # This looks at the JSON output by Yosys from the Lattice structural Verilog netlist in order
@@ -88,9 +145,14 @@ def rewrite_path(modules, modtype, from_pin, to_pin):
             return -1
         return mod["netnames"][name]["bits"][0]
 
+    if modtype.endswith("_IOL"):
+        return rewrite_iol(mod_cells, from_pin, to_pin)
     for cellname, cell in mod_cells.items():
         # Go through each sub-cell inside the SDF-level cell module
         celltype = cell["type"]
+        for prefix, name in ddr_block_types:
+            if celltype.startswith(prefix):
+                return (name, strip_bus(from_pin), strip_bus(to_pin))
         if celltype.startswith("UALUT4"):
             # Simple LUT4s
             if from_pin in ("A0", "A1", "B0", "B1", "C0", "C1", "D0", "D1") and to_pin in ("F0", "F1"):
@@ -237,8 +299,15 @@ def rewrite_path(modules, modtype, from_pin, to_pin):
             return ("LRAM_CORE", strip_prefix(from_pin, lram_prefixes), strip_prefix(to_pin, lram_prefixes))
     return None
 
+OUT_DIR = None
+
+
 def main():
+    global OUT_DIR
     folder = sys.argv[1]
+    for a in sys.argv:
+        if a.startswith("--out="):
+            OUT_DIR = a.split("=", 1)[1]
     family, fcfg = family_from_args(sys.argv)
     iopaths = {}
     setupholds = {}
@@ -328,7 +397,7 @@ def main():
                 min_setup=sh[0], max_setup=sh[1],
                 min_hold=sh[2], max_hold=sh[3])
             )
-        timing_root = path.join(database.get_db_root(), family, "timing")
+        timing_root = OUT_DIR or path.join(database.get_db_root(), family, "timing")
         os.makedirs(timing_root, exist_ok=True)
         with open(path.join(timing_root, "cells_{}.json".format(speed)), 'w') as outf:
             json.dump(dict(celltypes=json_celltypes), outf, sort_keys=True, indent=4)
