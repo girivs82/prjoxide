@@ -20,6 +20,14 @@
 #   (ECLKSYNC_CORE_R73C73<A-D>, ECLKDIV_CORE_R73C73<A-D>); banks 3 / 5 get it through their cascade
 #   inputs. For the DQSBUF edge-clock input select (fuzzers/LFCPNX/153-dqsbuf/README.md).
 #   ECLK_COL=74|73|72 puts them in bank 3 / 4 / 5's edge-clock column instead of bank 4's.
+#   For fuzzers/LFCPNX/157-dqsbuf-ivref:
+#   DQS_PARAMS='.NAME("VALUE"), ...' adds parameters to every DQSBUF / DQSBUF_IVREF.
+#   OUTDLY=ENABLED|DISABLED puts an OUTDELAYA (MARGIN_TEST_ENABLE = that value) between the output /
+#   tristate gearing and the pad, on the DQS and every DQ, as Lattice's LPDDR4 module does.
+#   DQ_IO=<IO type> sets the DQ pads' IO type (default LVSTL_I); DQ_ATTR='VREF=VREF_INT ...' adds
+#   attributes. DQ_IN=1 makes the DQ pads inputs (IDDRX4DQ only, no output gearing).
+#   OUTDLY_PATH=d|t sends only the data (d) or only the tristate (t) through the OUTDELAYA;
+#   OUTDLY_CTL=const ties its LOAD_N / DIRECTION / MOVE to constants and leaves COUT open.
 import random
 import sys
 
@@ -37,6 +45,24 @@ OUT_PINS = [("BTDETECT", 0), ("BURSTDETECT", 0), ("DATAVALID", 0), ("READCOUT", 
             ("WRLVCOUT", 0), ("DQSWRD", 0)]
 
 base = sys.argv[1]
+OUTDLY = os.environ.get("OUTDLY")
+DQ_IN = os.environ.get("DQ_IN") == "1"
+
+
+def outdly(o, t, name):
+    """Pass an output / tristate pair through an OUTDELAYA (OUTDLY set); return the pad-side pair."""
+    if not OUTDLY:
+        return o, t
+    path = os.environ.get("OUTDLY_PATH", "both")     # both | d (data only) | t (tristate only)
+    const = os.environ.get("OUTDLY_CTL") == "const"   # LOAD_N / DIRECTION / MOVE tied, COUT unused
+    body.append("    wire {0}_do, {0}_to, {0}_co;".format(name))
+    ctl = ("1'b1", "1'b0", "1'b0") if const else (sreg(1), sreg(1), sreg(1))
+    body.append('    OUTDELAYA #(.MARGIN_TEST_ENABLE("{}")) u_{n}_odla (.DOUTI({di}), .TOUTI({ti}), .DOUT({n}_do), .TOUT({n}_to), '
+                '.LOAD_N_LPDDR4_WT({}), .DIRECTION_LPDDR4_WT({}), .MOVE_LPDDR4_WT({}), .COUT_LPDDR4_WT({n}_co));'
+                .format(OUTDLY, *ctl, n=name, di=o if path != "t" else "1'b0", ti=t if path != "d" else "1'b0"))
+    if not const:
+        cap.append("{}_co".format(name))
+    return (name + "_do" if path != "t" else o), (name + "_to" if path != "d" else t)
 X2 = os.environ.get("GEAR") == "X2"
 NW = 4 if X2 else 8          # data bits per output gearing cell
 NT = 2 if X2 else 4          # tristate bits
@@ -73,12 +99,13 @@ cap.append("lock")
 for g, grp in enumerate(GROUPS):
     dqs, dqs_dq = grp[0], grp[1]
     ivref = grp[2] if len(grp) > 2 else True
-    ports += ["inout dqs{}".format(g), "inout [{}:0] dq{}".format(len(dqs_dq) - 1, g)]
+    ports += ["inout dqs{}".format(g), "{} [{}:0] dq{}".format("input" if DQ_IN else "inout", len(dqs_dq) - 1, g)]
     pdc += ["ldc_set_location -site {{{}}} [get_ports dqs{}]".format(dqs, g),
             "ldc_set_port -iobuf {{IO_TYPE={}}} [get_ports dqs{}]".format(DQS_IO, g)]
     for i, p in enumerate(dqs_dq):
         pdc += ["ldc_set_location -site {{{}}} [get_ports {{dq{}[{}]}}]".format(p, g, i),
-                "ldc_set_port -iobuf {{IO_TYPE=LVSTL_I}} [get_ports {{dq{}[{}]}}]".format(g, i)]
+                "ldc_set_port -iobuf {{IO_TYPE={}{}}} [get_ports {{dq{}[{}]}}]".format(
+                    os.environ.get("DQ_IO", "LVSTL_I"), (" " + os.environ["DQ_ATTR"]) if os.environ.get("DQ_ATTR") else "", g, i)]
     w = "g{}_".format(g)
     body.append("    wire {0}dqsi, {0}r90, {0}w, {0}w270, {0}dqso, {0}dqst; wire [2:0] {0}rdp, {0}wrp;".format(w))
     conns = [".DQSI({}dqsi)".format(w), ".ECLKIN(eclk)", ".SCLK(sclk)", ".DLLCODE(code)"]
@@ -113,7 +140,7 @@ for g, grp in enumerate(GROUPS):
         conns.append(".{}({})".format(name, o))
         cap.append(o)
     body.append('    ' + ('DQSBUF_IVREF' if ivref else 'DQSBUF') + ' #(.GSR("DISABLED"), .ENABLE_FIFO("ENABLED"), .MODX("MDDR{}"), .READ_ENABLE("ENABLED"), '
-                '.WRITE_ENABLE("ENABLED")) u_dqs{} ({});'.format(GX, g, ", ".join(conns)))
+                '.WRITE_ENABLE("ENABLED"){}) u_dqs{} ({});'.format(GX, (", " + os.environ["DQS_PARAMS"]) if os.environ.get("DQS_PARAMS") else "", g, ", ".join(conns)))
     rst = sreg(1)
     def dpins(p, n):
         return ",".join(".{}{}({})".format(p, k, sreg(1)) for k in range(n))
@@ -121,15 +148,18 @@ for g, grp in enumerate(GROUPS):
                 '.Q({w}dqso));'.format(GX, g, dpins("D", NW), rst, w=w))
     body.append('    TSH{}DQS #(.GSR("DISABLED")) u_dqst{} ({}, .DQSW({w}w), .ECLK(eclk), .SCLK(sclk), .RST({}), '
                 '.Q({w}dqst));'.format(GX, g, dpins("T", NT), rst, w=w))
-    body.append("    assign dqs{0} = {1}dqst ? 1'bz : {1}dqso; assign {1}dqsi = dqs{0};".format(g, w))
+    _o, _t = outdly(w + "dqso", w + "dqst", w + "dqs")
+    body.append("    assign dqs{0} = {2} ? 1'bz : {1}; assign {3}dqsi = dqs{0};".format(g, _o, _t, w))
     for i in range(len(dqs_dq)):
         x = "{}d{}_".format(w, i)
         body.append("    wire {0}o, {0}t; wire [{1}:0] {0}q;".format(x, NW - 1))
-        body.append('    ODDR{}DQ #(.GSR("DISABLED")) u_{x}o ({}, .DQSW270({w}w270), .ECLK(eclk), .SCLK(sclk), .RST({}), '
-                    '.Q({x}o));'.format(GX, dpins("D", NW), rst, w=w, x=x))
-        body.append('    TSH{}DQ #(.GSR("DISABLED")) u_{x}t ({}, .DQSW270({w}w270), .ECLK(eclk), .SCLK(sclk), .RST({}), '
-                    '.Q({x}t));'.format(GX, dpins("T", NT), rst, w=w, x=x))
-        body.append("    assign dq{g}[{i}] = {x}t ? 1'bz : {x}o;".format(g=g, i=i, x=x))
+        if not DQ_IN:
+            body.append('    ODDR{}DQ #(.GSR("DISABLED")) u_{x}o ({}, .DQSW270({w}w270), .ECLK(eclk), .SCLK(sclk), .RST({}), '
+                        '.Q({x}o));'.format(GX, dpins("D", NW), rst, w=w, x=x))
+            body.append('    TSH{}DQ #(.GSR("DISABLED")) u_{x}t ({}, .DQSW270({w}w270), .ECLK(eclk), .SCLK(sclk), .RST({}), '
+                        '.Q({x}t));'.format(GX, dpins("T", NT), rst, w=w, x=x))
+            _o, _t = outdly(x + "o", x + "t", x + "pad")
+            body.append("    assign dq{g}[{i}] = {t} ? 1'bz : {o};".format(g=g, i=i, o=_o, t=_t))
         body.append('    IDDR{gx}DQ #(.GSR("DISABLED")) u_{x}i (.D(dq{g}[{i}]), .DQSR90({w}r90), .ECLK(eclk), .SCLK(sclk), .RST({r}), '
                     '.RDPNTR0({w}rdp[0]), .RDPNTR1({w}rdp[1]), .RDPNTR2({w}rdp[2]), .WRPNTR0({w}wrp[0]), .WRPNTR1({w}wrp[1]), '
                     '.WRPNTR2({w}wrp[2]), {q});'.format(g=g, i=i, x=x, w=w, r=rst, gx=GX,
