@@ -54,8 +54,11 @@ classifications (libprjoxide/prjoxide/src/pip_classes.rs) and designs:
 - **20-fabric-clk**: fabric-generated clocks (a register output) driving 48 registers each, the
   source register pinned next to a mid mux's PCLKCIB entry (par refuses a fabric clock whose
   source is elsewhere: "routed with generic routing resources"). Measures `jpclkcib{b,t,l,r}N ->
-  j{v,h}pf_mid` / `jpclkcib*_mid_entry` for b0-b5, t0, t2-t5, l0-l3, r0-r3; t1 shares t0's CIB
-  and stays untimed.
+  j{v,h}pf_mid` / `jpclkcib*_mid_entry` for b0-b5, t0, t2-t5, l0-l3, r0-r3.
+- **20c-fabric-clk-t1**: t1, which shares t0's CIB (R1C72; t0 from CIBMUXOUT D6, t1 from D7): two
+  fabric clocks with their sources in that tile's slices C and D, the centre / other top entries /
+  other mid muxes prohibited; par routes them through t0 and t1. t1 = 1-4 ps per hop (grade 9), as
+  t0.
 - **20b-fabric-clk-far**: the far entries r4-r8 / l4-l8, fed from CIBs 13 columns in (C146 /
   C13) in the CIB-only rows 19 / 28 / 46 / 55. With free placement par never uses them; it does
   when the four near entries of the side are taken by other fabric clocks and the centre CMUX
