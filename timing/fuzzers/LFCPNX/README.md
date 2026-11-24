@@ -54,9 +54,14 @@ classifications (libprjoxide/prjoxide/src/pip_classes.rs) and designs:
 - **20-fabric-clk**: fabric-generated clocks (a register output) driving 48 registers each, the
   source register pinned next to a mid mux's PCLKCIB entry (par refuses a fabric clock whose
   source is elsewhere: "routed with generic routing resources"). Measures `jpclkcib{b,t,l,r}N ->
-  j{v,h}pf_mid` / `jpclkcib*_mid_entry` for b0-b5, t0, t2-t5, l0-l3, r0-r3. The far entries
-  r4-r8 / l4-l8 (CIBs 13 columns in) are never used by Radiant: sources pinned there are moved
-  to the centre CMUX tiles or the bottom; t1 shares t0's CIB. These stay untimed.
+  j{v,h}pf_mid` / `jpclkcib*_mid_entry` for b0-b5, t0, t2-t5, l0-l3, r0-r3; t1 shares t0's CIB
+  and stays untimed.
+- **20b-fabric-clk-far**: the far entries r4-r8 / l4-l8, fed from CIBs 13 columns in (C146 /
+  C13) in the CIB-only rows 19 / 28 / 46 / 55. With free placement par never uses them; it does
+  when the four near entries of the side are taken by other fabric clocks and the centre CMUX
+  tiles and the other mid muxes' entry tiles are prohibited (`ldc_prohibit`), with the sources
+  pinned in the logic rows next to the far CIBs (gen_fabclk.py ENTRY_LIST / PROHIBIT). Forcing
+  just the mid-mux arc with sv2udb (`\dm:arcs`) is accepted but gives no routed path to time.
 - **21-m-input**: dense register-to-register copies (data on the slice M input). Radiant enters M
   from span-1 wires only in their own tile; `w1:span1w -> m` / `e1:span1w -> m` are given
   `span1w -> m` (timing_config.py `derived_classes`).
@@ -77,5 +82,7 @@ tree together with the new clock designs (a free solve of everything re-splits c
 and raises the error on the older designs). `util/eval_interconnect.py` gives a json's error on
 the routed arcs; `util/class_census.py` counts arcs per class. Grade-9 rms: core designs 44.4 ps
 (unchanged), fabric-clock designs 39.5 ps (was 73.6 with the entries untimed), 05-clock 91 ps.
-In this solve the fabric-clock entries come out at 0-7 ps each: the rest of the path (mid -> dcc,
-the CMUX and the HPRX / VPSX tree) already accounts for Radiant's delays.
+In this solve the near fabric-clock entries come out at 0-7 ps each: the rest of the path (mid -> dcc,
+the CMUX and the HPRX / VPSX tree) already accounts for Radiant's delays. The far entries were
+then solved with every other class frozen (FREEZE_FROM = the previous result): r4-r8 54-76 ps per
+hop (grade 9), l4-l8 0-9 ps; on those arcs the model is within 2 ps of Radiant's.

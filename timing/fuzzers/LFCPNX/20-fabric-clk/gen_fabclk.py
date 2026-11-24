@@ -39,10 +39,18 @@ ENTRY_SRC = {   # entry -> (side, row offset, column offset) of its CIB from the
 minr, minc = min(r for r, c in plc), min(c for r, c in plc)
 
 
+plc_set = set(plc)
+
+
 def src_tile(entry):
     mr, mc = MIDS[entry[0]]
     dr, dc = ENTRY_SRC[entry]
     r, c = min(max(mr + dr, minr), maxr), min(max(mc + dc, minc), maxc)
+    # the far entries' CIBs (rows 19 / 28 / 46 / 55) are in CIB-only rows with no slices: take
+    # the logic tile just above (or below) instead
+    for d in (0, -1, 1, -2, 2):
+        if (r + d, c) in plc_set:
+            return r + d, c
     return r, c
 
 
@@ -94,4 +102,12 @@ for i in range(NCLK):
     r, c = src_tile(pick[i])
     # (slices C / D: in test builds par accepted sources there and refused some in A / B)
     pdc.append("ldc_set_location -site {{R{}C{}{}}} [get_cells {{gc_i{}.ff_inst}}]".format(r, c, random.choice("CD"), i))
+# PROHIBIT="r0:r1:c0:c1 ..." keeps par from placing anything in those PLC tiles (e.g. the centre
+# CMUX tiles and the other mid muxes' entry tiles, so the far entries are the only ones left)
+for box in os.environ.get("PROHIBIT", "").split():
+    r0, r1, c0, c1 = map(int, box.split(":"))
+    for r, c in sorted(plc_set):
+        if r0 <= r <= r1 and c0 <= c <= c1:
+            for z in "ABCD":
+                pdc.append("ldc_prohibit -site {{R{}C{}{}}}".format(r, c, z))
 open(base + ".pdc", "w").write("\n".join(pdc) + "\n")
