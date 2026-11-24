@@ -1,4 +1,4 @@
-import sys, pickle, math, json, os, glob
+import sys, pickle, math, json, os, glob, re
 
 from parse_sdf import parse_sdf_file
 import database
@@ -138,16 +138,40 @@ def main():
                 bmin[arc2row[from_pin, to_pin]] = max(dly.rising.minv, dly.falling.minv)
                 bmax[arc2row[from_pin, to_pin]] = max(dly.rising.maxv, dly.falling.maxv)
         print("Running least squares solver for speed {}...".format(speed))
+        # FREEZE_FROM=<dir>: classes that dir's interconnect_<speed>.json already has keep their value;
+        # their delay is taken off the right-hand side and only the other classes are solved
+        frozen = {}
+        if os.environ.get("FREEZE_FROM"):
+            fz = json.load(open(path.join(os.environ["FREEZE_FROM"], "interconnect_{}.json".format(speed))))["pip_classes"]
+            # FREEZE_EXCEPT=<regex>: classes matching it are solved again even if they have a value
+            exc = re.compile(os.environ["FREEZE_EXCEPT"]) if os.environ.get("FREEZE_EXCEPT") else None
+            frozen = {i: fz[v[0]]["base"] for i, v in enumerate(var_names)
+                      if v[0] in fz and not (exc and exc.search(v[0]))}
 
         # Run the least squares solver on the system of equations
+        A_s, bmin_s, bmax_s, free = A, bmin, bmax, list(range(len(var_names)))
+        if frozen:
+            free = [i for i in range(len(var_names)) if i not in frozen]
+            fmin = np.array([frozen[i][0] if i in frozen else 0 for i in range(len(var_names))], dtype=float)
+            fmax = np.array([frozen[i][1] if i in frozen else 0 for i in range(len(var_names))], dtype=float)
+            bmin_s, bmax_s = bmin - A @ fmin, bmax - A @ fmax
+            A_s = A[:, free]
+            # only rows with a free class constrain the free classes
+            rows = np.unique(A_s.nonzero()[0])
+            A_s, bmin_s, bmax_s = A_s[rows, :], bmin_s[rows], bmax_s[rows]
         if fcfg.get("nonneg"):
             # bounded least squares: classes that only ever occur together (e.g. abcd -> cibmuxi
             # -> cibmuxo -> ebr) are otherwise split into large positive and negative delays
-            xmin = lsq_linear(A, bmin, bounds=(0, np.inf), lsmr_tol="auto").x
-            xmax = lsq_linear(A, bmax, bounds=(0, np.inf), lsmr_tol="auto").x
+            ymin = lsq_linear(A_s, bmin_s, bounds=(0, np.inf), lsmr_tol="auto").x if len(free) else np.zeros(0)
+            ymax = lsq_linear(A_s, bmax_s, bounds=(0, np.inf), lsmr_tol="auto").x if len(free) else np.zeros(0)
         else:
-            xmin, istop, itn, r1norm = lsqr(A, bmin)[:4]
-            xmax, istop, itn, r1norm = lsqr(A, bmax)[:4]
+            ymin = lsqr(A_s, bmin_s)[0]
+            ymax = lsqr(A_s, bmax_s)[0]
+        xmin, xmax = np.zeros(len(var_names)), np.zeros(len(var_names))
+        for k, i in enumerate(free):
+            xmin[i], xmax[i] = ymin[k], ymax[k]
+        for i, (a, b) in frozen.items():
+            xmin[i], xmax[i] = a, b
 
         delay_json = {"pip_classes": {}}
 
@@ -156,6 +180,10 @@ def main():
             if var[0] not in delay_json["pip_classes"]:
                 delay_json["pip_classes"][var[0]] = {}
             delay_json["pip_classes"][var[0]][var[1]] = [int(xmin[i] + 0.5), int(xmax[i] + 0.5)]
+        for dc, ref in sorted(derived_classes.items()):
+            if dc not in delay_json["pip_classes"] and ref in delay_json["pip_classes"]:
+                print("  {:32s} {:20s} = {} (derived)".format(dc, "base", ref))
+                delay_json["pip_classes"][dc] = dict(delay_json["pip_classes"][ref])
         for zd in sorted(zero_delay_classes):
             print("  {:32s} {:20s} {:6.0f} {:6.0f} (fixed)".format(zd, "base", 0, 0))
             delay_json["pip_classes"][zd] = dict(base=[0, 0])
@@ -163,6 +191,14 @@ def main():
         # Write JSON so it can be used as part of the database  import process
         timing_root = path.join(database.get_db_root(), family, "timing")
         os.makedirs(timing_root, exist_ok=True)
+        # Classes no design of this solve measures keep their earlier value (e.g. measured by
+        # designs that are not part of this solve), rather than disappearing
+        old_fn = path.join(timing_root, "interconnect_{}.json".format(speed))
+        if fcfg.get("keep_unsolved") and path.exists(old_fn):
+            for cls, v in json.load(open(old_fn))["pip_classes"].items():
+                if cls not in delay_json["pip_classes"]:
+                    print("  {:32s} kept from the previous solve".format(cls))
+                    delay_json["pip_classes"][cls] = v
         with open(path.join(timing_root, "interconnect_{}.json".format(speed)), "w") as jf:
             json.dump(delay_json, jf, indent=4, sort_keys=True)
 
