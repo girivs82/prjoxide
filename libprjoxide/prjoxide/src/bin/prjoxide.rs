@@ -12,6 +12,7 @@ use prjoxide::chip::*;
 use prjoxide::database::*;
 use prjoxide::fasmparse::*;
 
+use std::collections::BTreeSet;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::*;
@@ -58,6 +59,9 @@ struct Pack {
     /// read the database from this directory instead of the one built in.
     #[clap(long)]
     db: Option<String>,
+    /// leave out PLL IP-bus writes of zero bytes, as Radiant does (for comparing with Radiant output)
+    #[clap(long)]
+    skip_zero_pll: bool,
 }
 
 impl Pack {
@@ -69,6 +73,9 @@ impl Pack {
         let parsed_fasm = ParsedFasm::parse(&self.fasm).unwrap();
 
         let mut chip = Chip::from_fasm(&mut db, &parsed_fasm, None);
+        if self.skip_zero_pll {
+            chip.drop_zero_pll_writes(&mut db);
+        }
 
         if self.background {
             chip.settings.insert("background".to_string(), "1".to_string());
@@ -100,6 +107,9 @@ struct Unpack {
     /// tiles) to this file, one "<flat frame index> <bit>" per line.
     #[clap(long)]
     frames: Option<String>,
+    /// Write every IP-bus byte as IP_UNKNOWN, without decoding the PLL registers.
+    #[clap(long)]
+    raw_ip: bool,
 }
 
 impl Unpack {
@@ -136,7 +146,10 @@ impl Unpack {
 
         chip.write_fasm_tiles(&mut db, &mut outfile);
 
-        for (addr, val) in chip.ipconfig.iter() {
+        // IP-bus writes: PLL registers decoded by name where the IP type reproduces them exactly,
+        // the rest as raw bytes
+        let explained = if self.raw_ip { BTreeSet::new() } else { chip.write_fasm_ip(&mut db, &mut outfile) };
+        for (addr, val) in chip.ipconfig.iter().filter(|(a, _)| !explained.contains(a)) {
             writeln!(outfile, "IP_UNKNOWN.0x{:08X}[7:0] = 8'h{:02X};", addr, val)?;
         }
 

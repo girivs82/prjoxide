@@ -494,6 +494,106 @@ Please make sure Oxide and nextpnr are up to date. If they are, consider reporti
             }
         }
     }
+    // Decode the IP-bus writes of the PLLs into named settings (the inverse of configure_ip), for
+    // the regions whose bytes the IP type's settings reproduce exactly. Writes the FASM lines and
+    // returns the addresses they account for; the caller writes the others as IP_UNKNOWN.
+    pub fn write_fasm_ip(&self, db: &mut Database, out: &mut dyn Write) -> BTreeSet<u32> {
+        let mut explained = BTreeSet::new();
+        let ba = db.device_baseaddrs(&self.family, &self.device);
+        let mut regions: Vec<(String, u32, u32)> = ba
+            .regions
+            .iter()
+            .filter(|(k, _)| k.starts_with("PLL_"))
+            .map(|(k, v)| (k.clone(), v.addr, v.abits))
+            .collect();
+        // EBR initialisation: one region per EBR (WID), EBR_WID0 + wid * (EBR_WID1 - EBR_WID0)
+        if let (Some(w0), Some(w1)) = (ba.regions.get("EBR_WID0"), ba.regions.get("EBR_WID1")) {
+            let (base, step, abits) = (w0.addr, w1.addr - w0.addr, w0.abits);
+            let wids: BTreeSet<u32> = self.ipconfig.keys()
+                .filter(|&&a| a >= base && (a - base) / step < 0x800)
+                .map(|&a| (a - base) / step).collect();
+            for wid in wids {
+                regions.push((format!("EBR_WID{}", wid), base + wid * step, abits));
+            }
+        }
+        for (ip, base, abits) in regions {
+            let end = base + (1u32 << abits);
+            let actual: BTreeMap<u32, u8> = self
+                .ipconfig
+                .range(base..end)
+                .map(|(&a, &v)| (a - base, v))
+                .collect();
+            if actual.is_empty() {
+                continue;
+            }
+            let tdb = &db.ip_bitdb(&self.family, self.get_ip_type(&ip)).db;
+            let get = |b: &ConfigBit| -> bool {
+                (actual.get(&(b.frame as u32)).cloned().unwrap_or(0) >> b.bit) & 1 == 1
+            };
+            let matches = |b: &ConfigBit| get(b) != b.invert;
+            let mut lines = Vec::new();
+            let mut model: BTreeMap<u32, u8> = BTreeMap::new();
+            let set = |m: &mut BTreeMap<u32, u8>, w: u32, b: u32, v: bool| {
+                let byte = m.entry(w).or_insert(0);
+                if v {
+                    *byte |= 1 << b;
+                } else {
+                    *byte &= !(1 << b);
+                }
+            };
+            // as configure_ip: enable bit, always_on, enums, words
+            if ip.starts_with("PLL_") {
+                set(&mut model, 0, 0, true);
+            }
+            for bit in tdb.always_on.iter() {
+                set(&mut model, bit.frame as u32, bit.bit as u32, !bit.invert);
+            }
+            for (name, en) in tdb.enums.iter() {
+                let best = en
+                    .options
+                    .iter()
+                    .filter(|(_, bits)| !bits.is_empty() && bits.iter().all(|b| matches(b)))
+                    .max_by_key(|(_, bits)| bits.len());
+                if let Some((opt, bits)) = best {
+                    lines.push(format!("IP_{}.{}.{}", ip, name, opt));
+                    for bit in bits.iter() {
+                        set(&mut model, bit.frame as u32, bit.bit as u32, !bit.invert);
+                    }
+                }
+            }
+            for (name, w) in tdb.words.iter() {
+                let mut val = String::new();
+                for wb in w.bits.iter().rev() {
+                    let v = wb.iter().next().map(|b| get(b) != b.invert).unwrap_or(false);
+                    val.push(if v { '1' } else { '0' });
+                    for bit in wb.iter() {
+                        set(&mut model, bit.frame as u32, bit.bit as u32, bit.invert != v);
+                    }
+                }
+                lines.push(format!("IP_{}.{}[{}:0] = {}'b{}", ip, name, w.bits.len() - 1, w.bits.len(), val));
+            }
+            if std::env::var("PRJOXIDE_IP_DEBUG").is_ok() {
+                for a in model.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+                    let (m, v) = (model.get(a).cloned().unwrap_or(0), actual.get(a).cloned().unwrap_or(0));
+                    if m != v {
+                        eprintln!("{} offset {:#x}: model {:#04x}{} actual {:#04x}{}", ip, a, m,
+                            if model.contains_key(a) { "" } else { " (unwritten)" }, v,
+                            if actual.contains_key(a) { "" } else { " (unwritten)" });
+                    }
+                }
+            }
+            // Radiant writes only the PLL bytes that are not zero, so a byte it left out is compared as 0
+            let same = model.keys().chain(actual.keys()).all(|a|
+                model.get(a).cloned().unwrap_or(0) == actual.get(a).cloned().unwrap_or(0));
+            if same {
+                for l in lines {
+                    writeln!(out, "{}", l).unwrap();
+                }
+                explained.extend(actual.keys().map(|a| a + base));
+            }
+        }
+        explained
+    }
     // Go from IP name to IP type
     pub fn get_ip_type(&self, ip: &str) -> &'static str {
         if ip.starts_with("EBR_WID") {
@@ -594,6 +694,20 @@ Please make sure Oxide and nextpnr are up to date. If they are, consider reporti
                         self.set_ip_bit(baseaddr, bit.frame as u32, bit.bit as u32, bit.invert != bit_val);
                     }
                 }
+            }
+        }
+    }
+    // Radiant writes only the PLL register bytes that are not zero. Drop the zero PLL bytes the same
+    // way, so a decoded Radiant bitstream packs back to the same IP-bus writes. Opt-in: a normal pack
+    // writes every byte the PLL settings cover.
+    pub fn drop_zero_pll_writes(&mut self, db: &mut Database) {
+        let regions: Vec<(u32, u32)> = db.device_baseaddrs(&self.family, &self.device).regions.iter()
+            .filter(|(k, _)| k.starts_with("PLL_")).map(|(_, v)| (v.addr, v.abits)).collect();
+        for (base, abits) in regions {
+            let zero: Vec<u32> = self.ipconfig.range(base..base + (1u32 << abits))
+                .filter(|(_, &v)| v == 0).map(|(&a, _)| a).collect();
+            for a in zero {
+                self.ipconfig.remove(&a);
             }
         }
     }
