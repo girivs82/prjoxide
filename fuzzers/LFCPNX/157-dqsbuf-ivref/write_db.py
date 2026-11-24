@@ -6,8 +6,8 @@ Write the bits found by this fuzzer (see README.md) into the LFCPNX tile types. 
   F37B1 F38B1 F39B1, and IOLOGIC<A|B>.OUTDELAYA.MARGIN_TEST_ENABLE: F33B1 F35B1 F36B1, in every HP
   (bank 3 / 4 / 5) IO tile type. A tile type holds one pad: SYSIO_B<n>_0* is PIOA / IOLOGICA,
   SYSIO_B<n>_1* is PIOB / IOLOGICB.
-- BMID.LLC_PLL_FBK (BMID_0_ECLK_1 F79B1-F82B1): PLL_LLC's dedicated CLKOP feedback into its FBKMUX input
-  JFBKCLK10, used when FBKCK = CLKOP and CLKOP is not on a primary clock (it drives an ECLKSYNC).
+(BMID_0_ECLK_1 F79B1-F82B1, first named here as an enum BMID.LLC_PLL_FBK, are the ECLKPLLFBL mux's
+LLCLKOP setting; 158-pll-eclk-fbk fuzzes that mux, so this script no longer writes them.)
 
 Usage: write_db.py [database root]
 """
@@ -55,10 +55,6 @@ MT = [(33, 1), (35, 1), (36, 1)]
 
 
 def main():
-    print("BMID_0_ECLK_1 BMID.LLC_PLL_FBK", add_enum("BMID_0_ECLK_1", "BMID.LLC_PLL_FBK",
-          [("OFF", []), ("CLKOP", [(79, 1), (80, 1), (81, 1), (82, 1)])],
-          "PLL_LLC dedicated feedback: CLKOP to the PLL's FBKMUX input JFBKCLK10 (GPLL_LLC "
-          "JFBKCK <- JFBKCLK10), when FBKCK = CLKOP and CLKOP is not on a primary clock"))
     for tt in sorted(os.path.basename(f)[:-4] for f in glob.glob(os.path.join(TT, "SYSIO_B[345]_1_DQS0*.ron"))):
         print(tt, "DQSBUF.LPDDR4_BL16_EN", add_enum(tt, "DQSBUF.LPDDR4_BL16_EN", [("DISABLED", []), ("ENABLED", BL16)],
               "DQSBUF_IVREF LPDDR4_BL16_EN: the DQSBUF's LPDDR4 burst-length-16 mode"))

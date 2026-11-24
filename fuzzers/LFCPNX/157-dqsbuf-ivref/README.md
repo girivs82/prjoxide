@@ -5,7 +5,8 @@ database did not know. A Radiant build of it, decoded, had two kinds of unknown 
 - `SYSIO_B3_1_DQS0` F55B1, in both DQS groups;
 - F33B1 and F35B1-F39B1, in every bank-3 IO tile that held a DQ, DMI or DQS pad.
 
-A SKALP-exported PHY with the PLL feedback fixed had a third kind: `BMID_0_ECLK_1` F79B1-F82B1.
+A SKALP-exported PHY with the PLL feedback fixed had a third kind: `BMID_0_ECLK_1` F79B1-F82B1
+(now decoded as a pip, see 158-pll-eclk-fbk).
 
 This fuzzer names all three. With them in the database:
 - the module build decodes with no unknown bits outside the PLL IP-bus writes;
@@ -87,14 +88,14 @@ ECLKDIV -> a counter. Their sources are SKALP's PLL wrapper and are not publishe
   decode as each other.
 - **Training pins:** the fabric wires of LOAD_N / MOVE / DIRECTION / COUT_LPDDR4_WT were not fuzzed.
 
-**BMID.LLC_PLL_FBK** (OFF / CLKOP = F79B1 F80B1 F81B1 F82B1, in BMID_0_ECLK_1):
-- PLL_LLC's dedicated feedback from CLKOP into its FBKMUX input JFBKCLK10, which has no fabric
-  connection in the database.
+**BMID_0_ECLK_1 F79B1-F82B1:**
+- PLL_LLC's dedicated feedback from CLKOP into its FBKMUX input JFBKCLK10.
 - Radiant uses it when FBKCK = CLKOP (internal-feedback mode, SEL_FBK = DIVA) and CLKOP is not on a
   primary clock, for example when CLKOP drives an ECLKSYNC on any bank's edge clock.
 - When CLKOP is a primary clock, the feedback goes through JFBKCLK11 (global JCLK1) and these bits
   stay clear.
-- The other three PLLs' equivalents were not checked.
+- This fuzzer first named the bits as an enum, BMID.LLC_PLL_FBK. They are the LLCLKOP setting of
+  the ECLKPLLFBL mux, which 158-pll-eclk-fbk fuzzes; the database now has that mux's pips instead.
 
 ## Not covered
 
