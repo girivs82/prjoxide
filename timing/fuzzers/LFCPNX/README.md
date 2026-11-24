@@ -32,7 +32,8 @@ interconnect solve; cell timings come from the SDF and are unaffected):
   differ from the (LIFCL-derived) LFCPNX TAP tile types.
 - IOLOGIC pins, and some LRAM / DSP pins: arcs whose trace does not reach the SDF
   source pin are left out.
-- 05-clock: PLL fabric pins and the REFMUX / FBKMUX inputs, and ECLKDIV outputs.
+- 05-clock / 23-pll-pins: PLL and ECLKDIV pins tied to constants (gen_clk leaves them
+  unconnected; Radiant drives them from GND_net), and some clocks through bottom-side DCCs.
   (DCC, DCS and DLLDEL pins are mapped; the bottom-side DCCs' pin wires are one row
   above their BMID tile, and an unused PCLKDIV passes DCS clock input 0 through.)
 
@@ -89,3 +90,44 @@ In this solve the near fabric-clock entries come out at 0-7 ps each: the rest of
 the CMUX and the HPRX / VPSX tree) already accounts for Radiant's delays. The far entries were
 then solved with every other class frozen (FREEZE_FROM = the previous result): r4-r8 54-76 ps per
 hop (grade 9), l4-l8 0-9 ps; on those arcs the model is within 2 ps of Radiant's.
+
+## PLL reference / feedback muxes and edge clock dividers
+
+**23-pll-pins:** eight more designs from 05-clock's generator. They were built with the current
+database: 05-clock's archived FASMs predate the fixes and still carry unknown tiles.
+
+**The extractor changes:**
+- It places edge clock syncs and dividers. Sites come from par's report (`comp ... on ECLKDIV_CORE
+  site ECLKDIV_CORE_R73C<74|73|72><A-D>` is bank 3 / 4 / 5, divider A-D), or from the routing.
+- Their pins are the R73 wires `J<pin>_ECLKDIV_CORE_ECLKDIVB<bank>_<n>` /
+  `J<pin>_ECLKSYNC_CORE_ECLKSYNC<bank>_<n>`.
+- The pad -> REFMUX connections are fixed (fuzzers/LFCPNX/159-pll-refclk).
+
+**New classes (pip_classes.rs):**
+- PLL muxes: `io18 / io33 -> refmux`, `clk -> refmux`, `refmux_internal`, `clk -> fbkmux`,
+  `fbkmux_internal`.
+- Edge clocks: `cibmuxo -> eclkbank`, `eclkbank_internal`, `eclkbank -> eclksync`,
+  `cibmuxo -> eclksync`, `eclksync -> eclkcasmux`, `eclkcasmux_internal`, `eclkcasmux -> eclkdiv`,
+  `cibmuxo -> eclkdiv`, `lsr -> eclkdiv`.
+- ECLKDIV outputs into the bottom mid mux: `jeclkdiv<n>_mid_entry` / `jeclkdiv<n> -> jvpf_mid`.
+- `refmux -> pll` and `fbkmux -> pll` are the mux output under the PLL pin's name, so they are
+  zero-delay.
+- Several of these always occur together (e.g. `eclkbank -> eclksync` and `eclkbank_internal`).
+  The solver splits their sum arbitrarily, and only the sum is meaningful.
+
+**Solve:**
+
+    FREEZE_FROM=<interconnect jsons of db 4a32c6e> FREEZE_EXCEPT="refmux|fbkmux|eclk|-> pll|pll ->" \
+        util/solve_interconnect.py output/LFCPNX LFCPNX
+
+**Result:** 27 new classes. The only existing classes that changed are `cibmuxo -> pll`,
+`clk -> pll` and `lsr -> pll`.
+
+Fit on the 05-clock and 23-pll-pins arcs through the new classes (grade 9):
+
+| Arcs through | Count | rms |
+|---|---|---|
+| REFMUX | 87 | 139 ps |
+| FBKMUX | 88 | 94 ps |
+| edge clock | 613 | 46 ps |
+| PLL fabric pins | 3641 | 25 ps (45 ps before) |

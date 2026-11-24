@@ -108,6 +108,14 @@ pub fn classify_pip(src_x: i32, src_y: i32, src_name: &str, dst_x: i32, dst_y: i
         ("_DCC_", "dcc"),
         ("_DCS_", "dcs"),
         ("_DLLDEL_CORE_", "dlldel"),
+        // PLL reference / feedback clock muxes (pad or clock -> REFMUX / FBKMUX -> PLL)
+        ("_REFMUX_CORE_", "refmux"),
+        ("_FBMUX_CORE_", "fbkmux"),
+        // edge clocks: fabric -> ECLKBANK input mux -> ECLKSYNC -> ECLKCASMUX -> ECLKDIV
+        ("_ECLKBANK_CORE_", "eclkbank"),
+        ("_ECLKSYNC_CORE_", "eclksync"),
+        ("_ECLKCASMUX_CORE_", "eclkcasmux"),
+        ("_ECLKDIV_CORE_", "eclkdiv"),
     ];
 
     static DSP_PRIMS: &[&'static str] = &["mult9", "preadd9", "mult18x36", "mult18", "reg18", "acc54", "mult36"];

@@ -626,6 +626,19 @@ def pio_core(dev, pio):
     return "SEIO33"
 
 
+# Edge clock syncs and dividers by their bel name (the global wires' suffix); used as the site of a
+# cell placed from the routing, as the timing reports do not name them
+ECLK_SITE_RE = re.compile(r'^((?:ECLKDIV_CORE_ECLKDIVB|ECLKSYNC_CORE_ECLKSYNC)(\d)_\d)$')
+# their wires sit at R73 of the bank's column (the ECLKBANK locations of 002c's GLOBAL_LOCS)
+ECLK_BANK_COL = {"3": 74, "4": 73, "5": 72}
+
+
+def eclk_keys(pin, bel):
+    bank = ECLK_SITE_RE.match(bel).group(2)
+    name = "J{}_{}".format(pin, bel)
+    return {("G", name), ("W", 73, ECLK_BANK_COL[bank], name)}
+
+
 # LFCPNX PLL bel offsets (rel_x, rel_y) from the GPLL tiles, as in libprjoxide bels.rs
 PLL_OFFSETS = {"LLC": (1, 1), "URC": (-1, 0), "ULC": (0, 1), "LRC": (-1, 0)}
 
@@ -686,6 +699,17 @@ def pin_keys(dev, cell_site, pin, routing, io_alias):
         dx, dy = PLL_OFFSETS[pl.group(1)]
         return {("W", r + dy, c + dx, "J{}_PLL_CORE_PLL_LMMI".format(pin))
                 for r, c in dev.tiles_of.get("GPLL_" + pl.group(1), ())}
+    ed = ECLK_SITE_RE.match(cell_site)
+    if ed:
+        # edge clock dividers / syncs: global wires J<pin>_ECLKDIV_CORE_ECLKDIVB<bank>_<n> /
+        # J<pin>_ECLKSYNC_CORE_ECLKSYNC<bank>_<n> (placed from the routing, see place_from_routing)
+        return eclk_keys(pin, ed.group(1))
+    rd = re.match(r'^ECLKDIV_CORE_R73C(7[234])([A-D])$', cell_site)
+    if rd:
+        # Radiant's ECLKDIV site names: columns 74 / 73 / 72 are banks 3 / 4 / 5, site letter A-D
+        # the divider index (the decoded ECLKDIV<bank><letter> settings of placed dividers)
+        bank = {"74": 3, "73": 4, "72": 5}[rd.group(1)]
+        return eclk_keys(pin, "ECLKDIV_CORE_ECLKDIVB{}_{}".format(bank, "ABCD".index(rd.group(2))))
     dc = re.match(r'^DCC_DCC_([LRTBC])(\d+)$', cell_site)
     if dc:
         # DCCs sit at their side's MID tile (bels.rs make_dcc: R one column in, C and B one row up)
@@ -796,7 +820,12 @@ def place_from_routing(dev, routing, arcs, site):
             iol_re = re.compile(r'^J{}_(S?)IOLOGIC_CORE_(?:IBASE_PIC|I_GEARING_PIC_TOP)_([AB])$'.format(
                 re.escape(src[1])))
 
+            eclk_re = re.compile(r'^J{}_((?:ECLKDIV_CORE_ECLKDIVB|ECLKSYNC_CORE_ECLKSYNC)\d_\d)$'.format(
+                re.escape(src[1])))
+
             def is_src(k):
+                if eclk_re.match(k[-1]):
+                    return True
                 return k[0] == "W" and (k[3] in names or blk_re.match(k[3]) is not None or
                                         iol_re.match(k[3]) is not None or
                                         pll_re.match(k[3]) is not None or dcc_re.match(k[3]) is not None or
@@ -807,7 +836,9 @@ def place_from_routing(dev, routing, arcs, site):
                 path_ = routing.trace(dk, is_src)
                 if path_:
                     k = path_[0][0]
-                    if k[3] in names:
+                    if eclk_re.match(k[-1]):
+                        site[src[0]] = eclk_re.match(k[-1]).group(1)
+                    elif k[3] in names:
                         site[src[0]] = "SLICE_R{}C{}{}".format(k[1], k[2], names[k[3]])
                     elif pll_re.match(k[3]) or dcc_re.match(k[3]) or dll_re.match(k[3]):
                         site[src[0]] = block_site_at(dev, k)
@@ -847,6 +878,14 @@ def main():
         m = re.match(r'^(?:SEIO|DIFFIO)\w*?_CORE_(\w+)$', s)
         if m and m.group(1) in pin2site:
             site[cell] = pin2site[m.group(1)]
+
+    # hard-block sites par's report names (edge clock dividers that drive clocks), before the
+    # routing places anything: placement from the routing can attach a slice to another clock
+    par = path.join(path.dirname(pad), "par.par")
+    if path.exists(par):
+        for cell, s_ in re.findall(r'comp "([^"]+)" on ECLKDIV_CORE site "(ECLKDIV_CORE_R\d+C\d+[A-D])"',
+                                   open(par, errors="replace").read()):
+            site.setdefault(cell, s_)
 
     sdf = parse_sdf_file(sdf_fn).cells["top"]
     arcs = [(tuple(unescape(x) for x in f.rsplit("/", 1)), tuple(unescape(x) for x in t.rsplit("/", 1)))

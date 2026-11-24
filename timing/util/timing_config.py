@@ -2,6 +2,10 @@
 
 zero_delay_classes = {
     "slice_internal",
+    # the PLL's REFCK / FBKCK pin is its REFMUX / FBKMUX output under another name (a fixed
+    # connection inside the PLL block)
+    "refmux -> pll",
+    "fbkmux -> pll",
     "vcc_internal",
     "s1:span1s -> a",
     "jeclkdiv0_mid_entry",
