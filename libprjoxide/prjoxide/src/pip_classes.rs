@@ -62,11 +62,13 @@ pub fn classify_pip(src_x: i32, src_y: i32, src_name: &str, dst_x: i32, dst_y: i
         ("JCIBMUXIN??", "cibmuxi"),
         ("JCIBMUXOUT??", "cibmuxo"),
 
-        // Clock tree wires by index: two digits, as the larger devices
-        // (LFCPNX) have spine and row wires numbered 10 and up (VPSX1100)
-        ("HPBX??00", "hpbx"),
-        ("VPSX??00", "vpsx"),
-        ("HPRX??00", "hprx"),
+        ("HPBX0?00", "hpbx"),
+        ("VPSX0?00", "vpsx"),
+        ("HPRX0?00", "hprx"),
+        // LFCPNX has more global row / spine tracks than LIFCL (index 10 and up)
+        ("HPBX1?00", "hpbx"),
+        ("VPSX1?00", "vpsx"),
+        ("HPRX1?00", "hprx"),
         ("?HPRX?", "hprx_g"),
         ("?HPRX??", "hprx_g"),
         ("JHPRX?_CMUX_CORE_CMUX?", "hprx_cmux"),
@@ -76,6 +78,14 @@ pub fn classify_pip(src_x: i32, src_y: i32, src_name: &str, dst_x: i32, dst_y: i
         // unchanged
         ("??HPRX?", "hprx_g"),
         ("??HPRX??", "hprx_g"),
+        // LFCPNX: a hard block's output reaches JFn / JQn through the CIB's test-mux input
+        // (block -> JFn_CIBTEST / JQn_CIBTEST -> JFn / JQn). Radiant's routing never shows the
+        // second hop separately (the timing extractor sees the test-mux input as an alias of JFn /
+        // JQn), so the measured "<block> -> f" / "<block> -> q" delays cover the whole path: the
+        // test-mux wires take the f / q class, and "f -> f" / "q -> q" are zero-delay classes
+        // (timing/util/timing_config.py)
+        ("JF?_CIBTEST", "f"),
+        ("JQ?_CIBTEST", "q"),
     ];
 
     static CIB_PRIMS: &[(&'static str, &'static str)] = &[
@@ -97,6 +107,7 @@ pub fn classify_pip(src_x: i32, src_y: i32, src_name: &str, dst_x: i32, dst_y: i
         ("_CONFIG_", "cfg"),
         ("_DCC_", "dcc"),
         ("_DCS_", "dcs"),
+        ("_DLLDEL_CORE_", "dlldel"),
     ];
 
     static DSP_PRIMS: &[&'static str] = &["mult9", "preadd9", "mult18x36", "mult18", "reg18", "acc54", "mult36"];
@@ -208,6 +219,23 @@ pub fn classify_pip(src_x: i32, src_y: i32, src_name: &str, dst_x: i32, dst_y: i
         // From DCC to DCS
         let cmux_entry = dst_name.splitn(2, &DIGIT_OR_US[..]).nth(0).unwrap().to_lowercase();
         return Some(format!("dcc -> {}_dcs", cmux_entry));
+    }
+    // LFCPNX DCS input muxes: a clock spine (JHPFE / JHPFW / JVPF) selected onto a DCS input
+    if src_name.contains("_DCSMUX_CORE_") && dst_name.contains("_DCSMUX_CORE_") {
+        return Some("dcsmux_internal".to_string());
+    }
+    if src_name.contains("_DCSMUX_CORE_") && dst_name.contains("_DCS_") {
+        return Some("dcsmux -> dcs".to_string());
+    }
+    // DCS clock input 0 runs through the (unused) PCLKDIV: DCSMUXOUT -> PCLKDIV CLKIN -> CLKOUT
+    if src_name.contains("_DCSMUX_CORE_") && dst_name.contains("_PCLKDIV_") {
+        return Some("dcsmux -> pclkdiv".to_string());
+    }
+    if src_name.contains("_PCLKDIV_") && dst_name.contains("_PCLKDIV_") {
+        return Some("pclkdiv_internal".to_string());
+    }
+    if src_name.contains("_PCLKDIV_") && dst_name.contains("_DCS_") {
+        return Some("pclkdiv -> dcs".to_string());
     }
     if src_name.contains("DCSOUT") && dst_name.contains("_CMUX_CORE_") {
         return Some("dcs -> cmux".to_string());

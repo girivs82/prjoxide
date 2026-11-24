@@ -21,6 +21,7 @@ pub mod database_html;
 pub mod docs;
 pub mod fasmparse;
 pub mod fuzz;
+pub mod lfcpnx_decode;
 pub mod ipfuzz;
 pub mod nodecheck;
 pub mod wires;

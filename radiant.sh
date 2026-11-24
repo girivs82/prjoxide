@@ -60,7 +60,9 @@ cp "$2.v" "$2.tmp/input.v"
 MAYBE_PDC=""
 if [ -e "$2.pdc" ]; then cp "$2.pdc" "$2.tmp/input.pdc"; MAYBE_PDC="$2.tmp/input.pdc"; fi
 
-if ([ -z "$FORCE_REBUILD" ] && (LD_LIBRARY_PATH=$ld_lib_path_orig $bscache fetch $PART "$2.tmp" "$2.tmp/input.v" $MAYBE_PDC)); then
+# OPER_COND (commercial | industrial | automotive, postsyn -oc) is not part of the bitstream cache
+# key, so a build that sets it is never taken from the cache
+if ([ -z "$FORCE_REBUILD" ] && [ -z "$OPER_COND" ] && (LD_LIBRARY_PATH=$ld_lib_path_orig $bscache fetch $PART "$2.tmp" "$2.tmp/input.v" $MAYBE_PDC)); then
 	# Cache hit
 	echo "Cache hit, not running Radiant"
 else
@@ -75,7 +77,7 @@ else
 				-output_hdl synth.vm
 
 	"$fpgabindir"/postsyn -a "$LSE_ARCH" -p "$DEVICE" -t "$PACKAGE" -sp "$SPEED_GRADE" \
-				-top -w -o synth.udb synth.vm
+				${OPER_COND:+-oc "$OPER_COND"} -top -w -o synth.udb synth.vm
 	if [ -e input.pdc ]; then
 		MAP_PDC="input.pdc"
 	else
@@ -87,7 +89,7 @@ else
 
 	if [ -n "$GEN_RBF" ]; then
 		"$fpgabindir"/bitgen $EXTRA_BIT_ARGS -b -d -w par.udb
-		LD_LIBRARY_PATH=$ld_lib_path_orig $bscache commit $PART "input.v" $MAP_PDC output "par.udb" "par.rbt"
+		[ -n "$OPER_COND" ] || LD_LIBRARY_PATH=$ld_lib_path_orig $bscache commit $PART "input.v" $MAP_PDC output "par.udb" "par.rbt"
 	else
 		if [ -n "$RBK_MODE" ]; then
 			"$fpgabindir"/bitgen $EXTRA_BIT_ARGS -d -w -m 1 par.udb
@@ -95,7 +97,7 @@ else
 		else	
 			"$fpgabindir"/bitgen $EXTRA_BIT_ARGS -d -w par.udb
 		fi
-		LD_LIBRARY_PATH=$ld_lib_path_orig $bscache commit $PART "input.v" $MAP_PDC output "par.udb" "par.bit"
+		[ -n "$OPER_COND" ] || LD_LIBRARY_PATH=$ld_lib_path_orig $bscache commit $PART "input.v" $MAP_PDC output "par.udb" "par.bit"
 	fi
 	export LD_LIBRARY_PATH=""
 fi

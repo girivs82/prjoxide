@@ -1,0 +1,1 @@
+[("AF6", ["AE5", "AF5"], False), ("AF12", ["AB12"], False), ("AF22", ["AD20", "AA18", "AC19", "AE23", "AF23"], False), ("AF21", ["AF19", "W18", "AE19", "AF20"], False), ("AF14", ["W12"], False), ("U26", ["W25", "W23", "V22", "W26", "V26"], False), ("AE26", ["AB20"], False)]

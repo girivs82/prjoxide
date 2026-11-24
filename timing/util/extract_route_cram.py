@@ -153,6 +153,13 @@ class Device:
                 for to, fw, bits in pips:
                     if not bits:
                         self._by_dst[split_rel(to)[1]].append((tt, to, fw, "zero"))
+            # An unused PCLKDIV passes its input straight through (Radiant sets no PCLKDIV bit on
+            # a DCS clock-0 path, which runs DCSMUXOUT -> PCLKDIV CLKIN -> CLKOUT -> DCS CLK0)
+            for tt in ("CMUX_0", "CMUX_1_GSR"):
+                if tt in self.tiles_of:
+                    for i in (0, 1):
+                        self._by_dst["JCLKOUT_PCLKDIV_PCLKDIV{}".format(i)].append(
+                            (tt, "N1:JCLKOUT_PCLKDIV_PCLKDIV{}".format(i), "N1:JCLKIN_PCLKDIV_PCLKDIV{}".format(i), "conn"))
         return self._by_dst
 
     # -- global clock network segment keys ------------------------------------------------------
@@ -501,7 +508,7 @@ def parse_twr(fns, member2cell):
     """SDF cell -> site, from the Cell/Site column (and Path Begin/End lines) of timing reports."""
     site = {}
     site_tok = re.compile(r'^(SLICE_R\d+C\d+[A-D]|[A-Z][A-Z0-9]*_R\d+C\d+\w*|(?:SEIO|DIFFIO)\w+|'
-                          r'PLL_CORE_PLL_(?:LLC|LRC|ULC|URC)|DCC_DCC_[LRTBC]\d+|S?IOLOGIC_CORE_IOL_\w+)$')
+                          r'PLL_CORE_PLL_(?:LLC|LRC|ULC|URC)|DCC_DCC_[LRTBC]\d+|DCS_DCS[AB]|S?IOLOGIC_CORE_IOL_\w+)$')
 
     def add(name, s):
         inst = name.split("->")[0].rsplit("/", 1)[0]
@@ -568,12 +575,17 @@ def pio_loc(dev, pio):
 
 
 def block_site_at(dev, k):
-    """Radiant site name of the PLL or DCC whose pin wire is k (inverse of pin_keys)."""
+    """Radiant site name of the PLL, DCC or DCS whose pin wire is k (inverse of pin_keys)."""
+    m = re.match(r'^J\w+?_DCS_DCSIP([01])$', k[3])
+    if m:
+        return "DCS_DCS" + "AB"[int(m.group(1))]
+    if re.match(r'^J\w+?_DLLDEL_CORE_I0$', k[3]):
+        return "DLLDEL_CORE_R{}C{}".format(k[1], k[2])
     m = re.match(r'^J\w+?_DCC_DCC(\d+)$', k[3])
     if m:
         for side, tts, (dx, dy) in (("L", ("LMID",), (0, 0)), ("R", ("RMID",), (-1, 0)),
                                     ("T", ("TMID_0", "TMID_1"), (0, 0)),
-                                    ("B", ("BMID_0_ECLK_1", "BMID_1_ECLK_2"), (0, 0)),
+                                    ("B", ("BMID_0_ECLK_1", "BMID_1_ECLK_2"), (0, -1)),
                                     ("C", ("CMUX_0", "CMUX_1_GSR", "CMUX_6", "CMUX_7"), (0, -1))):
             if any((r + dy, c + dx) == (k[1], k[2]) for tt in tts for r, c in dev.tiles_of.get(tt, ())):
                 return "DCC_DCC_{}{}".format(side, m.group(1))
@@ -676,12 +688,24 @@ def pin_keys(dev, cell_site, pin, routing, io_alias):
                 for r, c in dev.tiles_of.get("GPLL_" + pl.group(1), ())}
     dc = re.match(r'^DCC_DCC_([LRTBC])(\d+)$', cell_site)
     if dc:
-        # DCCs sit at their side's MID tile (bels.rs make_dcc: R one column in, C one row up)
+        # DCCs sit at their side's MID tile (bels.rs make_dcc: R one column in, C and B one row up)
         tts = {"L": ("LMID",), "R": ("RMID",), "T": ("TMID_0", "TMID_1"),
                "B": ("BMID_0_ECLK_1", "BMID_1_ECLK_2"), "C": ("CMUX_0", "CMUX_1_GSR", "CMUX_6", "CMUX_7")}[dc.group(1)]
-        dx, dy = {"R": (-1, 0), "C": (0, -1)}.get(dc.group(1), (0, 0))
+        # (BMID: N1, the tile type's DCC pin wires are N1:J*_DCC_DCC<n>)
+        dx, dy = {"R": (-1, 0), "C": (0, -1), "B": (0, -1)}.get(dc.group(1), (0, 0))
         return {("W", r + dy, c + dx, "J{}_DCC_DCC{}".format(pin, dc.group(2)))
                 for tt in tts for r, c in dev.tiles_of.get(tt, ())}
+    dd = re.match(r'^DLLDEL_CORE_R(\d+)C(\d+)$', cell_site)
+    if dd:
+        # the PCLK input delay cells: pin wires J<pin>_DLLDEL_CORE_I0 at the site's own location
+        # (LMID's N1E1: / the DLY tiles' N1: wires)
+        return {("W", int(dd.group(1)), int(dd.group(2)), "J{}_DLLDEL_CORE_I0".format(pin))}
+    ds = re.match(r'^DCS_DCS([AB])$', cell_site)
+    if ds:
+        # the two central DCSs: pin wires J<pin>_DCS_DCSIP<0|1> one row above the CMUX_0 tile
+        # (its tile type's N1: wires); A / B taken as IP0 / IP1, both offered (the trace picks)
+        return {("W", r - 1, c, "J{}_DCS_DCSIP{}".format(pin, i))
+                for r, c in dev.tiles_of.get("CMUX_0", ()) for i in (0, 1)}
     im = re.match(r'^(S?)IOLOGIC_CORE_IOL_([LRTB]\d+[AB])$', cell_site)
     if im:
         # IO logic: at its PIO's SYSIO tile; HP banks have IOLOGIC_CORE_I_GEARING_PIC_TOP_<A/B>,
@@ -768,6 +792,7 @@ def place_from_routing(dev, routing, arcs, site):
             blk_re = re.compile(r'^J{}_((?:EBR|LRAM)_CORE)$'.format(re.escape(src[1])))
             pll_re = re.compile(r'^J{}_PLL_CORE_PLL_LMMI$'.format(re.escape(src[1])))
             dcc_re = re.compile(r'^J{}_DCC_DCC(\d+)$'.format(re.escape(src[1])))
+            dll_re = re.compile(r'^J{}_DLLDEL_CORE_I0$'.format(re.escape(src[1])))
             iol_re = re.compile(r'^J{}_(S?)IOLOGIC_CORE_(?:IBASE_PIC|I_GEARING_PIC_TOP)_([AB])$'.format(
                 re.escape(src[1])))
 
@@ -775,6 +800,7 @@ def place_from_routing(dev, routing, arcs, site):
                 return k[0] == "W" and (k[3] in names or blk_re.match(k[3]) is not None or
                                         iol_re.match(k[3]) is not None or
                                         pll_re.match(k[3]) is not None or dcc_re.match(k[3]) is not None or
+                                        dll_re.match(k[3]) is not None or
                                         (dsp_re.match(k[3]) is not None and
                                          dsp_re.match(k[3]).group(1) in DSP_BELS))
             for dk in sorted(pin_keys(dev, site[dst[0]], dst[1], routing, {})):
@@ -783,7 +809,7 @@ def place_from_routing(dev, routing, arcs, site):
                     k = path_[0][0]
                     if k[3] in names:
                         site[src[0]] = "SLICE_R{}C{}{}".format(k[1], k[2], names[k[3]])
-                    elif pll_re.match(k[3]) or dcc_re.match(k[3]):
+                    elif pll_re.match(k[3]) or dcc_re.match(k[3]) or dll_re.match(k[3]):
                         site[src[0]] = block_site_at(dev, k)
                         if site[src[0]] is None:
                             del site[src[0]]

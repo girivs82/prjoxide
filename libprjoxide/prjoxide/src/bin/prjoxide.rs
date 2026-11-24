@@ -134,9 +134,7 @@ impl Unpack {
             writeln!(outfile, "")?;
         }
 
-        for tile in chip.tiles {
-            tile.write_fasm(&mut db, &mut outfile);
-        }
+        chip.write_fasm_tiles(&mut db, &mut outfile);
 
         for (addr, val) in chip.ipconfig.iter() {
             writeln!(outfile, "IP_UNKNOWN.0x{:08X}[7:0] = 8'h{:02X};", addr, val)?;
