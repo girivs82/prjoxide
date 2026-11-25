@@ -131,3 +131,19 @@ Fit on the 05-clock and 23-pll-pins arcs through the new classes (grade 9):
 | FBKMUX | 88 | 94 ps |
 | edge clock | 613 | 46 ps |
 | PLL fabric pins | 3641 | 25 ps (45 ps before) |
+
+## 24-dqsbuf-pins: DQSBUF fabric input timing
+
+**Design:** 156-dqsw-iologic's phy1 byte lane (DQSBUF at the AF4 group, ECLKSYNC / ECLKDIV / DDRDLL),
+with every DQSBUF input from its own SCLK register. Run 1 uses DQSBUF. Run 2 uses DQSBUF_IVREF with
+LVSTL IO types.
+
+**Result:**
+- **SDF:** in every grade's backanno SDF, the only DQSBUF timing check is `SETUPHOLD RST (posedge SCLK)`.
+  It is already in cells_<grade>.json.
+- **Timing report:** RST is the only DQSBUF endpoint. READ, PAUSE, RDCLKSEL, RSTSMCNT, SELCLK and the
+  delay-control inputs are not endpoints, and they are not listed as unconstrained either.
+- **Hold:** Radiant's own hold check on RST uses a library hold of -0.133 ns (grade M). The SDF writes
+  it as 0.
+- **Database:** primitives.json marks the untimed pins `"untimed": true`. Not part of the
+  interconnect solve.
