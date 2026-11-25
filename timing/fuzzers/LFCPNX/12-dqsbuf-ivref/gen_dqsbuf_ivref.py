@@ -20,6 +20,8 @@
 #   (ECLKSYNC_CORE_R73C73<A-D>, ECLKDIV_CORE_R73C73<A-D>); banks 3 / 5 get it through their cascade
 #   inputs. For the DQSBUF edge-clock input select (fuzzers/LFCPNX/153-dqsbuf/README.md).
 #   ECLK_COL=74|73|72 puts them in bank 3 / 4 / 5's edge-clock column instead of bank 4's.
+#   DQ_DELAY=1 puts a DELAYA with its dynamic pins (LOAD_N / MOVE / DIRECTION from registers, CFLAG
+#   captured) between each DQ pad and its IDDRX4DQ (timing/fuzzers/LFCPNX/25-iologic-delay).
 #   For fuzzers/LFCPNX/157-dqsbuf-ivref:
 #   DQS_PARAMS='.NAME("VALUE"), ...' adds parameters to every DQSBUF / DQSBUF_IVREF.
 #   OUTDLY=ENABLED|DISABLED puts an OUTDELAYA (MARGIN_TEST_ENABLE = that value) between the output /
@@ -160,9 +162,18 @@ for g, grp in enumerate(GROUPS):
                         '.Q({x}t));'.format(GX, dpins("T", NT), rst, w=w, x=x))
             _o, _t = outdly(x + "o", x + "t", x + "pad")
             body.append("    assign dq{g}[{i}] = {t} ? 1'bz : {o};".format(g=g, i=i, o=_o, t=_t))
-        body.append('    IDDR{gx}DQ #(.GSR("DISABLED")) u_{x}i (.D(dq{g}[{i}]), .DQSR90({w}r90), .ECLK(eclk), .SCLK(sclk), .RST({r}), '
+        din = "dq{}[{}]".format(g, i)
+        if os.environ.get("DQ_DELAY") == "1":
+            body.append("    wire {0}pd, {0}cf;".format(x))
+            body.append('    DELAYA #(.DEL_MODE("USER_DEFINED"), .DEL_VALUE("0")) u_{x}dl (.A({a}), .LOAD_N({}), .MOVE({}), '
+                        ".DIRECTION({}), .COARSE0(1'b0), .COARSE1(1'b0), .RANKSELECT(1'b0), .RANKENABLE(1'b0), "
+                        ".RANK0UPDATE(1'b0), .RANK1UPDATE(1'b0), .Z({x}pd), .EDETERR(), .CFLAG({x}cf));".format(
+                            sreg(1), sreg(1), sreg(1), x=x, a=din))
+            cap.append("{}cf".format(x))
+            din = x + "pd"
+        body.append('    IDDR{gx}DQ #(.GSR("DISABLED")) u_{x}i (.D({din}), .DQSR90({w}r90), .ECLK(eclk), .SCLK(sclk), .RST({r}), '
                     '.RDPNTR0({w}rdp[0]), .RDPNTR1({w}rdp[1]), .RDPNTR2({w}rdp[2]), .WRPNTR0({w}wrp[0]), .WRPNTR1({w}wrp[1]), '
-                    '.WRPNTR2({w}wrp[2]), {q});'.format(g=g, i=i, x=x, w=w, r=rst, gx=GX,
+                    '.WRPNTR2({w}wrp[2]), {q});'.format(g=g, i=i, x=x, w=w, r=rst, gx=GX, din=din,
                                                        q=",".join(".Q{0}({1}q[{0}])".format(k, x) for k in range(NW))))
         cap.append("^{}q".format(x))
 

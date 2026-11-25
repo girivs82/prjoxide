@@ -147,3 +147,52 @@ LVSTL IO types.
   it as 0.
 - **Database:** primitives.json marks the untimed pins `"untimed": true`. Not part of the
   interconnect solve.
+
+## 25-iologic-delay: IO logic delay cells' dynamic pins
+
+**Designs** (`gen_iologic_delay.py`):
+- **Runs 1-2:** four DQS groups covering every bank 3 / 4 / 5 SYSIO_B<n>_0* tile type: bank 3 PB150,
+  bank 4 PB54 and PB66 (MID), bank 5 PB6.
+  - Each group has a single-ended DQS and a plain DQSBUF. Every other pad of the group, the
+    complement included, is a DQ.
+  - Every DQ and DQS output goes through an OUTDELAYA (MARGIN_TEST_ENABLE ENABLED), with
+    LOAD_N / MOVE / DIRECTION_LPDDR4_WT from registers and COUT_LPDDR4_WT captured.
+  - Every DQ input goes through a DELAYA, with LOAD_N / MOVE / DIRECTION from registers and CFLAG
+    captured (12-dqsbuf-ivref's generator, `DQ_DELAY=1`).
+- **Run 3:** each group's DQS pad with DELAYA + IDDRX4 and no DQSBUF. A DQS pad's input cannot
+  feed both a delay and its DQSBUF.
+
+**Method:** `tools/radiant-fuzz/infer_iologic_conns.py` maps each pin to its CIB wire from the SDF arcs
+and routes, relative to the pad pair's `_0` tile. `infer_report.txt` has every pin of every tile type.
+
+**Results** (wires relative to the `_0` tile; the A pad uses `N1:`, the B pad `N1E1:`):
+
+| Cell | Pin | Wire |
+|---|---|---|
+| OUTDELAYA | LOAD_N_LPDDR4_WT | JCIBMUXOUTD1 |
+| OUTDELAYA | MOVE_LPDDR4_WT | JCIBMUXOUTC7 |
+| OUTDELAYA | DIRECTION_LPDDR4_WT | JCIBMUXOUTD2 |
+| OUTDELAYA | COUT_LPDDR4_WT | JQ6 |
+| DELAYA | LOAD_N | JCIBMUXOUTC2 |
+| DELAYA | MOVE | JCIBMUXOUTB2 |
+| DELAYA | DIR | JCIBMUXOUTA2 |
+| DELAYA | COUT (CFLAG) | JQ3 |
+
+- **The same on every tile type.** The database had the OUTDELAYA connections only in SYSIO_B3_0,
+  B4_0, B5_0, B5_0_DQS1 and B5_0_DQS3. Every measured pin agrees with those.
+- **Missing connections added:** they were missing in B3_0_DQS1, B3_0_DQS3, B4_0_DQS1, B4_0_DQS1_MID,
+  B4_0_DQS3 and B4_0_DQS3_MID, and are now written there.
+  - The inputs were measured on all of them.
+  - COUT_LPDDR4_WT was measured on some (A of B3_0_DQS1 / B4_0_DQS1, B of B3_0_DQS3 / B4_0_DQS3).
+    Elsewhere it follows the same pattern. No route contradicts it.
+- **DELAYA's dynamic pins** match the database (from LIFCL) on every tile type, A and B, on DQ and DQS
+  pads.
+- **Bits:**
+  - A fabric-driven OUTDELAYA sets only OUTDELAYA.USED and MARGIN_TEST_ENABLE, as a constant-tied
+    one does (157-dqsbuf-ivref).
+  - A dynamic DELAYA sets LOAD_NMUX / MOVEMUX / DIRMUX, already in the database.
+- **Decode check:** run 1 rebuilt as a normal bitstream gives 0 unknown bits and packs back to the
+  same FASM.
+  - 46 of the generator's 48 OUTDELAYAs were placed.
+  - The timing flow's readback images show TAP_PLC bits at C134 as unknown. The TAP region of
+    readback frames is not laid out like the tile grid.
